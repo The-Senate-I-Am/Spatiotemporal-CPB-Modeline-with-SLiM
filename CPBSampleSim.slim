@@ -50,6 +50,14 @@ initialize()
             	}
             }
         }
+        if (count == 0) {
+            print("No migration rates set for subpopulation p"+fvids[i]);
+            for (j in 0:(nrow(mx)-1)) {
+            	if (i-1 != j) {
+                	sim.subpopulations[i-1].setMigrationRates(sim.subpopulations[j], 0.0);
+            	}
+            }
+        }
     }
     
 }

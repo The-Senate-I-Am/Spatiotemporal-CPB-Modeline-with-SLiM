@@ -1,7 +1,0 @@
-initialize()
-{
-}
-1 early()
-{
-	print("hello, world");
-}
