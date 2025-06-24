@@ -141,9 +141,11 @@ plot_coordinates_path_clustered = './out/field_locations_clustered.png'
 CLUSTERS = 50   # Number of clusters for KMeans
 
 
+# Read the CSV file and extract important information into field_data
 field_data = read_csv('./data/final_data_for_modeling.csv')
 print("Read data from CSV file successfully.")
 
+# Perform actions based on user preferences
 if (create_distance_matrix_in):
     create_distance_matrix(field_data, cutoff=CUTOFF)
     print("Distance matrix saved to './data/distances.csv'.")
