@@ -1,0 +1,38 @@
+class Field:
+    # Creates a field with unique field_id, latitude, longitude, and an empty data list
+    # initializes cluster_num to -1 by default 
+    def __init__(self, field_id, latitude, longitude, cluster=-1):
+        self.field_id = field_id
+        self.latitude = latitude
+        self.longitude = longitude
+        self.data = []  # List of tuples: (year, count, gdd)
+        self.cluster = cluster
+
+    # Adds a data point for a specific year to the field's data list 
+    def add_data_point(self, year, count, gdd):
+        self.data.append((year, count, gdd))
+        
+    # Sets the cluster number for the field
+    def set_cluster(self, cluster):
+        self.cluster = cluster
+
+    def __repr__(self):
+        return (f"Field(field_id={self.field_id}, latitude={self.latitude}, "
+                f"longitude={self.longitude}, data={self.data})")
+        
+        
+class Cluster:
+    # Creates a cluster with a unique cluster_id and an empty list of fields
+    def __init__(self, cluster_id, latitude=None, longitude=None):
+        self.cluster_id = cluster_id
+        self.latitude = latitude
+        self.longitude = longitude
+        self.fields = []  # List of Field objects in this cluster
+        self.data = []    # List of tuples: (year, count, gdd) aggregated or for the cluster
+
+    # Adds a field to the cluster
+    def add_field(self, field):
+        self.fields.append(field)
+
+    def __repr__(self):
+        return f"Cluster(cluster_id={self.cluster_id}, fields={self.fields})"

@@ -1,37 +1,40 @@
 import csv
-from collections import defaultdict
 import numpy as np
 from math import cos, asin, sqrt, pi
 import pandas as pd
 import matplotlib.pyplot as plt
 from sklearn.cluster import KMeans
+import random
 
+import DataWrappers
 
 # Read the CSV file and extract important information into a dictionary
 def read_csv(csv_file_path='./data/final_data_for_modeling.csv'):
-    # Dictionary to store coordinates for each unique field_fvid (lat, lng, count)
-    field_data = defaultdict(list)
+    # Dictionary to store field objects for each unique field_fvid
+    field_data = dict()
 
     # Read the CSV file and extract important information into field_data
     try:
         with open(csv_file_path, mode='r', newline='', encoding='utf-8') as csvfile:
             reader = csv.DictReader(csvfile)
-            count = 0
             for row in reader:
-                #if count > 200:
-                #    break
-                count += 1
                 field_fvid = row['field_fvid']
                 lat = float(row['lat'])
                 lng = float(row['lng'])
+                year = int(row['year'])
+                gdd = float(row['gdd'])
                 
                 # Calculate averages for cpba_count and cpbl_count
                 cpba_count = float(row['cpba_count'])
                 cpbl_count = float(row['cpbl_count'])
                 avg_count = (cpba_count + cpbl_count) / 2
                 
-                # Add to field_coordinates
-                field_data[field_fvid] = (lat, lng, avg_count)
+                # Add to field_data
+                if (field_fvid not in field_data):
+                    field_data[field_fvid] = DataWrappers.Field(field_fvid, lat, lng)
+                    field_data[field_fvid].add_data_point(year, avg_count, gdd) 
+                else:
+                    field_data[field_fvid].add_data_point(year, avg_count, gdd)  
                 
     except FileNotFoundError:
         print(f"Error: File not found at {csv_file_path}")
@@ -45,32 +48,32 @@ def read_csv(csv_file_path='./data/final_data_for_modeling.csv'):
 
 
 
-# Calculate distances between field coordinates and save to a distance matrix
+# Calculate distances between each field coordinate and save to a distance matrix
 def create_distance_matrix(field_data, cutoff=10000):
-    # Calculate distances between field coordinates and save to a distance matrix
-
     # Function to calculate distance between two coordinates in km using Haversine formula
     def distance(lat1, lon1, lat2, lon2):
         r = 6371 # km
         p = pi / 180
 
         a = 0.5 - cos((lat2-lat1)*p)/2 + cos(lat1*p) * cos(lat2*p) * (1-cos((lon2-lon1)*p))/2
-        return 2 * r * asin(sqrt(a))
+        return int(2 * r * asin(sqrt(a)) * 1000)  # Convert km to meters for more precision
 
+    # Create a distance matrix with field_fvids as both row and column headers
     grid = np.eye(len(field_data)+1, dtype=int)
     fvids = list(field_data.keys())
     for i in range(len(field_data)):
-        grid[i+1][0] = fvids[i]
+        grid[i+1][0] = fvids[i] 
         grid[0][i+1] = fvids[i]
 
-    for i in range(len(field_data)):
-        for j in range(i, len(field_data)):
-            lat1 = field_data[fvids[i]][0]
-            lon1 = field_data[fvids[i]][1]
-            lat2 = field_data[fvids[j]][0]
-            lon2 = field_data[fvids[j]][1]
+    # Calculate distances and fill the distance matrix storing data only if dist is <= cutoff
+    for i in range(len(fvids)):
+        for j in range(i, len(fvids)):
+            lat1 = field_data[fvids[i]].latitude
+            lon1 = field_data[fvids[i]].longitude
+            lat2 = field_data[fvids[j]].latitude
+            lon2 = field_data[fvids[j]].longitude
         
-            dist = int(1000* distance(lat1, lon1, lat2, lon2)) # Convert km to meters for more precision
+            dist = distance(lat1, lon1, lat2, lon2) # Convert km to meters for more precision
             if (dist <= cutoff): # Only store distances less than or equal to cutoff
                 grid[i+1][j+1] = dist
 
@@ -82,11 +85,11 @@ def create_distance_matrix(field_data, cutoff=10000):
 def plot_coordinates(field_data, output_path='./out/field_locations.png'):
     # Prepare data for plotting
     plot_data = {'Latitude': [], 'Longitude': [], 'Cluster': []}
-    for _, (lat, lng, _, *rest) in field_data.items():
-        plot_data['Latitude'].append(lat)
-        plot_data['Longitude'].append(lng)
+    for field in field_data.values():
+        plot_data['Latitude'].append(field.latitude)
+        plot_data['Longitude'].append(field.longitude)
         # Use the fourth field (cluster) if it exists, otherwise default to None
-        plot_data['Cluster'].append(rest[0] if len(rest) > 0 else None)
+        plot_data['Cluster'].append(field.cluster if field.cluster != -1 else None)
 
     # Convert to a format suitable for plotting
     df = pd.DataFrame(plot_data)
@@ -106,13 +109,11 @@ def plot_coordinates(field_data, output_path='./out/field_locations.png'):
     plt.savefig(output_path, format='png')
     plt.close()
     
-#Add a feature to this method that gives the points on the plot color based on the fourth field of the field data generated by the KMeans algorithm. If the fourth field is not there, leave the color as default.    
-
     
-    
-def cluster_coordinates(field_data, n_clusters=5, iters=2000, random_state=42):
+# Cluster the coordinates using KMeans and add cluster labels to the field data    
+def cluster_coordinates(field_data, n_clusters=5, iters=2000, random_state=random.randint(0, 1000)):
     # Prepare data for clustering
-    coordinates = np.array([[lat, lng] for lat, lng, _ in field_data.values()])
+    coordinates = np.array([[field.latitude, field.longitude] for field in field_data.values()])
     
     # Perform KMeans clustering
     kmeans = KMeans(n_clusters=n_clusters, max_iter=iters, random_state=random_state)
@@ -120,11 +121,31 @@ def cluster_coordinates(field_data, n_clusters=5, iters=2000, random_state=42):
     
     # Add cluster labels to the field data
     for i, fvid in enumerate(field_data.keys()):
-        field_data[fvid] = (*field_data[fvid], kmeans.labels_[i])
+        field_data[fvid].set_cluster(kmeans.labels_[i])
     
     return field_data
     
 
+# This function is used to take field data that has been run through cluster_coordinates and create a new list
+# that contains averaged data for each cluster such as location and count
+def create_cluster_data(field_data, num_clusters):
+    # Start by creating a list of lists of lists which sorts each node into its respective cluster. 
+    # Each cluster has a list of latitudes, longitudes, average counts, and field_fvids which will be operated on to create generalized cluster data
+    cluster_data_inter = []
+    for fvid in field_data.keys():
+        lat, lng, avg_count, cluster = field_data[fvid]
+        if cluster_data_inter[cluster] is None:
+            cluster_data_inter[cluster] = [[lat],[lng],[avg_count], [fvid]]
+        else:
+            cluster_data_inter[cluster][0].append(lat)
+            cluster_data_inter[cluster][1].append(lng)
+            cluster_data_inter[cluster][2].append(avg_count)
+            cluster_data_inter[cluster][3].append(fvid)
+            
+    #TODO: finish this method
+    
+    
+    return
 
 
 
@@ -132,13 +153,14 @@ def cluster_coordinates(field_data, n_clusters=5, iters=2000, random_state=42):
 create_distance_matrix_in = input("Calculate the distance matrix? (y/n): ").strip().lower() == 'y'
 plot_coordinates_in = input("Plot the coordinates? (y/n): ").strip().lower() == 'y'
 clustered_in = False
+num_clusters = 0
 if (plot_coordinates_in):
     clustered_in = input("Cluster the coordinates before plotting? (y/n): ").strip().lower() == 'y'
+    num_clusters = int(input("Enter the number of clusters (default 50): ").strip() or 50)
 
 CUTOFF = 10000  # Cutoff distance in meters for the distance matrix
 plot_coordinates_path_unclustered = './out/field_locations.png'
 plot_coordinates_path_clustered = './out/field_locations_clustered.png'
-CLUSTERS = 50   # Number of clusters for KMeans
 
 
 # Read the CSV file and extract important information into field_data
@@ -152,14 +174,10 @@ if (create_distance_matrix_in):
 
 if (plot_coordinates_in):
     if clustered_in:
-        cluster_coordinates(field_data, n_clusters=50)
+        cluster_coordinates(field_data, n_clusters=num_clusters, iters=2000, random_state=random.randint(0, 1000))
         print("Coordinates clustered successfully.")
         plot_coordinates(field_data, output_path=plot_coordinates_path_clustered)
         print(f"Plot saved to '{plot_coordinates_path_clustered}'.")
     else:
         plot_coordinates(field_data, output_path=plot_coordinates_path_unclustered)
         print(f"Plot saved to '{plot_coordinates_path_unclustered}'.")
-
-
-
-#print("Field data:", field_data)
