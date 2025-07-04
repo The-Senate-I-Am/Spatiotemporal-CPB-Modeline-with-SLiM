@@ -128,24 +128,27 @@ def cluster_coordinates(field_data, n_clusters=5, iters=2000, random_state=rando
 
 # This function is used to take field data that has been run through cluster_coordinates and create a new list
 # that contains averaged data for each cluster such as location and count
-def create_cluster_data(field_data, num_clusters):
+def create_cluster_data(field_data, estimate_data=True):
     # Start by creating a list of lists of lists which sorts each node into its respective cluster. 
     # Each cluster has a list of latitudes, longitudes, average counts, and field_fvids which will be operated on to create generalized cluster data
-    cluster_data_inter = []
+    clusters = []
     for fvid in field_data.keys():
-        lat, lng, avg_count, cluster = field_data[fvid]
-        if cluster_data_inter[cluster] is None:
-            cluster_data_inter[cluster] = [[lat],[lng],[avg_count], [fvid]]
-        else:
-            cluster_data_inter[cluster][0].append(lat)
-            cluster_data_inter[cluster][1].append(lng)
-            cluster_data_inter[cluster][2].append(avg_count)
-            cluster_data_inter[cluster][3].append(fvid)
+        cluster_id = field_data[fvid].cluster
+        
+        if clusters[cluster_id] is None:
+            clusters[cluster_id] = DataWrappers.Cluster(cluster_id)
+        clusters[cluster_id].add_field(field_data[fvid])
+    
+    # Calculate the yearly data and coordinates for each cluster based on inputted fields
+    for cluster in clusters:
+        cluster.calculate_coordinates()
+        cluster.fill_data(year_start=2014, year_end=2024)  # Fill the cluster's data with averages for each year
+        if estimate_data:
+            cluster.estimate_data(year_start=2014, year_end=2024)  # Estimate data if required
             
-    #TODO: finish this method
-    
-    
-    return
+    return clusters
+        
+        
 
 
 
