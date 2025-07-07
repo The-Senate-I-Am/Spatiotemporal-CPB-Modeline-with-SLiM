@@ -29,6 +29,7 @@ class Cluster:
         self.longitude = longitude
         self.fields = []  # List of Field objects in this cluster
         self.data = []    # List of tuples: (year, estimated, count, gdd) aggregated or for the cluster
+        self.START_YEAR = 2014  # The starting year for the data
 
     # Adds a field to the cluster
     def add_field(self, field):
