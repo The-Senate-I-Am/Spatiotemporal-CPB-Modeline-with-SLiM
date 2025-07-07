@@ -3,4 +3,4 @@ Plot the field coordinates? (y/n): n
 Plot clustered field coordinates? (y/n): n
 Num Clusters (default 50): 200
 Plot clusters? (y/n): y
-Generate csv for specific year (specify year/default: no)? 2020
+Generate csv for specific year (specify year/default: no)? 2021

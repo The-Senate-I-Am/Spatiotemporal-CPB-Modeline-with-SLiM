@@ -221,7 +221,7 @@ def cluster_year_snapshot(clusters, year):
 
 
 
-#TODO: check functionality of this function
+#TODO: check functionality of this function 
 
 # This function takes a list of clusters and a year, and writes the snapshot of that year's data to a CSV file
 def cluster_year_snapshot_to_csv(clusters, year, output_path):

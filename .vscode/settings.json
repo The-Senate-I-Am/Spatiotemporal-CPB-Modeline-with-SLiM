@@ -1,7 +1,14 @@
 {
     "cSpell.words": [
+        "cmap",
+        "cpba",
+        "cpbl",
+        "csvfile",
         "fvids",
+        "savetxt",
         "Subpop",
         "unclustered"
-    ]
+    ],
+    "cSpell.diagnosticLevel": "Hint"
+
 }
