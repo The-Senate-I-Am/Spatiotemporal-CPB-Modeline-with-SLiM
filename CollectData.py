@@ -133,15 +133,15 @@ def cluster_coordinates(field_data, n_clusters=5, iters=2000, random_state=rando
 def create_cluster_data(field_data, estimate_data=True):
     # Start by creating a list of lists of lists which sorts each node into its respective cluster. 
     # Each cluster has a list of latitudes, longitudes, average counts, and field_fvids which will be operated on to create generalized cluster data
-    clusters = [None] * max(field_data[fvid].cluster for fvid in field_data.keys())  # Create a list of None with length equal to the number of clusters
-    #print(len(clusters), max(field_data[fvid].cluster for fvid in field_data.keys()))
+    clusters = [None] * (1+max(field_data[fvid].cluster for fvid in field_data.keys()))  # Create a list of None with length equal to the number of clusters
+    
     for fvid in field_data.keys():
         cluster_id = field_data[fvid].cluster
         
         #print(len(clusters), cluster_id)
-        if clusters[cluster_id-1] is None:
-            clusters[cluster_id-1] = DataWrappers.Cluster(cluster_id)
-        clusters[cluster_id-1].add_field(field_data[fvid])
+        if clusters[cluster_id] is None:
+            clusters[cluster_id] = DataWrappers.Cluster(cluster_id)
+        clusters[cluster_id].add_field(field_data[fvid])
     
     # Calculate the yearly data and coordinates for each cluster based on inputted fields
     for cluster in clusters:
