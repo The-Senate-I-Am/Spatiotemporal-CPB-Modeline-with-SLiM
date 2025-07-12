@@ -134,6 +134,7 @@ def create_cluster_data(field_data, estimate_data=True):
     # Start by creating a list of lists of lists which sorts each node into its respective cluster. 
     # Each cluster has a list of latitudes, longitudes, average counts, and field_fvids which will be operated on to create generalized cluster data
     clusters = [None] * max(field_data[fvid].cluster for fvid in field_data.keys())  # Create a list of None with length equal to the number of clusters
+    #print(len(clusters), max(field_data[fvid].cluster for fvid in field_data.keys()))
     for fvid in field_data.keys():
         cluster_id = field_data[fvid].cluster
         
@@ -145,9 +146,7 @@ def create_cluster_data(field_data, estimate_data=True):
     # Calculate the yearly data and coordinates for each cluster based on inputted fields
     for cluster in clusters:
         cluster.calculate_coordinates()
-        cluster.fill_data(year_start=2014, year_end=2024)  # Fill the cluster's data with averages for each year
-        if estimate_data:
-            cluster.estimate_data(year_start=2014, year_end=2024)  # Estimate data if required
+        cluster.average_data()
             
     return clusters
 
@@ -207,33 +206,25 @@ def plot_cluster_coordinates(clusters, output_path='./out/cluster_field_location
     plt.savefig(output_path, format='png')
     plt.close()
 
-#TODO-------------------------------------------------------------------------------------------------------------------
-# This function takes a list of clusters and returns a dictionary representation of the data for a specific year
-def cluster_year_snapshot(clusters, year):
-    # Convert the clusters into a matrix format for easier processing
-    matrix = []
-    matrix.append(['Cluster ID', 'Latitude', 'Longitude', 'Estimated?', 'Average Count', 'Average GDD'])
+def cluster_data_to_csv(clusters, output_path='./data/cluster_data.csv'):
+    # Create a DataFrame to hold the cluster data
+    data = {
+        'Cluster ID': [],
+        'Latitude': [],
+        'Longitude': [],
+        'Average Count': [],
+        'Average GDD': []
+    }
+    
     for cluster in clusters:
-        year_data = cluster.data[year-cluster.START_YEAR]
-        all_data = [cluster.cluster_id, cluster.latitude, cluster.longitude, year_data[1], year_data[2], year_data[3]]
-        matrix.append(all_data)
-    return matrix
-#TODO-------------------------------------------------------------------------------------------------------------------
-
-
-#TODO: change to cluster_data_to_csv
-
-# This function takes a list of clusters and a year, and writes the snapshot of that year's data to a CSV file
-def cluster_year_snapshot_to_csv(clusters, year, output_path):
-    # Convert the clusters into a matrix format for easier processing
-    matrix = cluster_year_snapshot(clusters, year)
+        data['Cluster ID'].append(cluster.cluster_id)
+        data['Latitude'].append(cluster.latitude)
+        data['Longitude'].append(cluster.longitude)
+        data['Average Count'].append(cluster.data[0])  # Assuming first element is average count
+        data['Average GDD'].append(cluster.data[1])  # Assuming second element is average GDD
     
-    # Write the matrix to a CSV file
-    with open(output_path, mode='w', newline='', encoding='utf-8') as csvfile:
-        writer = csv.writer(csvfile)
-        writer.writerows(matrix)
-    
-    print(f"Cluster year snapshot for {year} saved to '{output_path}'.")
+    df = pd.DataFrame(data)
+    df.to_csv(output_path, index=False)
         
 
 
@@ -304,7 +295,4 @@ clusters = create_cluster_data(field_data, estimate_data=True)
 plot_cluster_coordinates(clusters, output_path='./out/cluster_field_locations.png')
 create_cluster_distance_matrix(clusters, cutoff=CUTOFF, output_path='./data/cluster_distances.csv')
 
-year = input("Generate CSV for specific year (specify year/default: no)? ").strip()
-if year:
-    year = int(year)
-    cluster_year_snapshot_to_csv(clusters, year, output_path=f'./data/cluster_snapshot_{year}.csv')
+cluster_data_to_csv(clusters, output_path='./data/cluster_data.csv')

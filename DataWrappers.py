@@ -46,8 +46,8 @@ class Cluster:
         
         
         
-    # Fills the cluster's data attribute with average counts and GDD for each year
-    def fill_data(self):
+    # Fills the cluster's data attribute with average counts and GDD 
+    def average_data(self):
         #Generate an intermediate data structure to hold all the data for each type in a list to average later
         inter_data = []
         for i in range(1,len(self.fields[0].data[0])): # disregard the year in the 0-index of the data
@@ -56,7 +56,7 @@ class Cluster:
         for field in self.fields:
             for datapoint in field.data:
                 for i in range(1, len(datapoint)):
-                    inter_data[i].append(datapoint[i])
+                    inter_data[i-1].append(datapoint[i])
                     
         # Calculate the average for each type of data and store it in the cluster's data attribute
         avg_data = []
