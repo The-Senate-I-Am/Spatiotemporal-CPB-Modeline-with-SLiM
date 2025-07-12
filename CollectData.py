@@ -207,7 +207,7 @@ def plot_cluster_coordinates(clusters, output_path='./out/cluster_field_location
     plt.savefig(output_path, format='png')
     plt.close()
 
-
+#TODO-------------------------------------------------------------------------------------------------------------------
 # This function takes a list of clusters and returns a dictionary representation of the data for a specific year
 def cluster_year_snapshot(clusters, year):
     # Convert the clusters into a matrix format for easier processing
@@ -218,10 +218,10 @@ def cluster_year_snapshot(clusters, year):
         all_data = [cluster.cluster_id, cluster.latitude, cluster.longitude, year_data[1], year_data[2], year_data[3]]
         matrix.append(all_data)
     return matrix
+#TODO-------------------------------------------------------------------------------------------------------------------
 
 
-
-#TODO: check functionality of this function 
+#TODO: change to cluster_data_to_csv
 
 # This function takes a list of clusters and a year, and writes the snapshot of that year's data to a CSV file
 def cluster_year_snapshot_to_csv(clusters, year, output_path):

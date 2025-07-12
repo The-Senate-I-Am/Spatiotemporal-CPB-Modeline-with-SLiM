@@ -4,3 +4,8 @@ TODO:
 2. Should clusters really be taking the average of the CPB counts? maybe instead it should just be summing it up.
 
 3. Should I essentially make a 3D csv for yearly data? Or is it fine to just have it as such with each year being a separate csv?
+
+
+
+4. Find potential function to use for estimating data:
+
