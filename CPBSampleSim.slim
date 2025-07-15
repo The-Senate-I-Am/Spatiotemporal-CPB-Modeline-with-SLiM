@@ -65,14 +65,14 @@ initialize()
             	}
             }
         }
-        /*if (count == 0) {
+        if (count == 0) {
             print("No migration rates set for subpopulation p"+i);
             for (j in 0:(ncol(distMX)-1)) {
             	if (i != j) {
-                	subpopulationsWithNames("p"+i).setMigrationRates(subpopulationsWithNames("p"+j), 0.0);
+                    sim.subpopulations[i].setMigrationRates(sim.subpopulations[j], 0.0);
             	}
             }
-        }*/
+        }
     }
     
 }
