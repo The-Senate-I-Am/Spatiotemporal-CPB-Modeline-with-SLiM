@@ -117,7 +117,7 @@ def cluster_coordinates(field_data, n_clusters=5, iters=2000, random_state=rando
     coordinates = np.array([[field.latitude, field.longitude] for field in field_data.values()])
     
     # Perform KMeans clustering
-    kmeans = KMeans(n_clusters=n_clusters, max_iter=iters, random_state=random_state)
+    kmeans = KMeans(n_clusters=n_clusters, max_iter=iters, random_state=random_state, n_init='auto')
     kmeans.fit(coordinates)
     
     # Add cluster labels to the field data
@@ -166,8 +166,9 @@ def create_cluster_distance_matrix(clusters, cutoff=10000, output_path='./data/c
     # Create a distance matrix with cluster IDs as both row and column headers
     grid = np.eye(len(clusters) + 1, dtype=int)
     for i in range(len(clusters)):
-        grid[i + 1][0] = clusters[i].cluster_id
-        grid[0][i + 1] = clusters[i].cluster_id
+        grid[i + 1][0] = clusters[i].cluster_id 
+        grid[0][i + 1] = clusters[i].cluster_id 
+    grid[0][0] = 0
 
     # Calculate distances and fill the distance matrix storing data only if dist is <= cutoff
     for i in range(len(clusters)):
@@ -180,6 +181,7 @@ def create_cluster_distance_matrix(clusters, cutoff=10000, output_path='./data/c
             dist = distance(lat1, lon1, lat2, lon2)  # Convert km to meters for more precision
             if dist <= cutoff:  # Only store distances less than or equal to cutoff
                 grid[i + 1][j + 1] = dist
+                grid[j + 1][i + 1] = dist  # Ensure symmetry in the distance matrix
 
     np.savetxt(output_path, grid, delimiter=",", fmt='%i')
 
@@ -282,7 +284,7 @@ def cluster_data_to_csv(clusters, output_path='./data/cluster_data.csv'):
 #     cluster_year_snapshot_to_csv(clusters, year, output_path=f'./data/cluster_snapshot_{year}.csv')
 #     print(f"Cluster year snapshot for {year} saved to './data/cluster_snapshot_{year}.csv'.")
     
-CUTOFF = 30000
+CUTOFF = 8000
 
 field_data = read_csv('./data/final_data_for_modeling.csv')
 #create_distance_matrix(field_data, cutoff=CUTOFF)

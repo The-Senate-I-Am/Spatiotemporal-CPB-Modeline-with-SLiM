@@ -1,7 +1,6 @@
 // set up a simple neutral simulation
 initialize()
 {
-   //initializeSLiMModelType("nonWF");
 	// set the overall mutation rate
 	initializeMutationRate(1e-7);
 	// m1 mutation type: neutral
@@ -17,52 +16,68 @@ initialize()
 1 early()
 {
 	//sim.addSubpop("p1", 500);
-    if (!fileExists(/*"./data/distances.csv"*/"C:/Users/sohan/Documents/School/Entomology Research/Codebase/Spatiotemporal-CPB-Modeline-with-SLiM/data/distances.csv")) {
+    // Read in cluster data from CSV files
+    if (!fileExists(/*"./data/cluster_distances.csv"*/"C:/Users/sohan/Documents/School/Entomology Research/Codebase/Spatiotemporal-CPB-Modeline-with-SLiM/data/cluster_distances.csv")) {
         print("distances.csv not found");
         sim.simulationFinished();
     }
-    df = readCSV(/*"./data/distances.csv"*/"C:/Users/sohan/Documents/School/Entomology Research/Codebase/Spatiotemporal-CPB-Modeline-with-SLiM/data/distances.csv", colNames=T, sep=",");
-    if (isNULL(df)) {
+    distDF = readCSV(/*"./data/cluster_distances.csv"*/"C:/Users/sohan/Documents/School/Entomology Research/Codebase/Spatiotemporal-CPB-Modeline-with-SLiM/data/cluster_distances.csv", colNames=T, sep=",");
+    if (isNULL(distDF)) {
     	print("Could not read distances.csv");
     	sim.simulationFinished();
     }
-    //sim.addSubpop("p120201", 200);
-    fvids = df.colNames;
-    for (i in 1:(size(fvids)-1)) {
-        sim.addSubpop("p"+fvids[i], 200);
-    }
-    mx = df.asMatrix();
-    print(mx[0+nrow(mx)*3]);
 
-    // set the migration rate between subpopulations
-    for (i in 1:(size(fvids)-1)) {
+    if (!fileExists(/*"./data/cluster_data.csv"*/"C:/Users/sohan/Documents/School/Entomology Research/Codebase/Spatiotemporal-CPB-Modeline-with-SLiM/data/cluster_data.csv")) {
+        print("distances.csv not found");
+        sim.simulationFinished();
+    }
+    propDF = readCSV(/*"./data/cluster_data.csv"*/"C:/Users/sohan/Documents/School/Entomology Research/Codebase/Spatiotemporal-CPB-Modeline-with-SLiM/data/cluster_data.csv", colNames=T, sep=",");
+    if (isNULL(propDF)) {
+    	print("Could not read distances.csv");
+    	sim.simulationFinished();
+    }
+
+
+    distMX = distDF.asMatrix();
+
+    //print(distMX[0, 5]);
+
+    //print(ncol(distMX));
+
+
+    for (i in 0:(propDF.nrow-1)) {
+        sim.addSubpop("p"+i, asInteger(propDF.getValue("Average Count")[i] * 1000));
+    }
+    
+    
+    for (i in 0:(ncol(distMX)-1)) {
         count = 0;
-        for (j in 0:(nrow(mx)-1)) {
-            if (mx[i+nrow(mx)*j] > 0) {
+        for (j in 0:(nrow(distMX)-1)) {
+            if (distMX[i+ncol(distMX)*j] > 0) {
             	count = count + 1;
             }
         }
         if (count > 0) {
-            migrationRate = 1.0 / count;
-            for (j in 0:(nrow(mx)-1)) {
-            	if (i-1 != j & mx[i+nrow(mx)*j] > 0) {
-                	sim.subpopulations[i-1].setMigrationRates(sim.subpopulations[j], migrationRate);
+            migrationRate = 0.7 / count; // 0.3 chance of not migrating
+            for (j in 0:(ncol(distMX)-1)) {
+            	if (i != j & distMX[i+ncol(distMX)*j] > 0) {
+                    sim.subpopulations[i].setMigrationRates(sim.subpopulations[j], migrationRate);
             	}
             }
         }
-        if (count == 0) {
-            print("No migration rates set for subpopulation p"+fvids[i]);
-            for (j in 0:(nrow(mx)-1)) {
-            	if (i-1 != j) {
-                	sim.subpopulations[i-1].setMigrationRates(sim.subpopulations[j], 0.0);
+        /*if (count == 0) {
+            print("No migration rates set for subpopulation p"+i);
+            for (j in 0:(ncol(distMX)-1)) {
+            	if (i != j) {
+                	subpopulationsWithNames("p"+i).setMigrationRates(subpopulationsWithNames("p"+j), 0.0);
             	}
             }
-        }
+        }*/
     }
     
 }
 // run to tick 10000
-10000 early()
+100 early()
 {
 	sim.simulationFinished();
 }

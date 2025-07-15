@@ -9,3 +9,10 @@ TODO:
 
 4. Find potential function to use for estimating data:
 
+One thing to ask: Why is the missing data missing?
+when do we have data for certain fields and when do we not have that data
+
+Based on this information, can we just assume that the missing data is missing at random ? 
+
+The grant paper said we will have 4 data collection periods: 2015, 2019, 2023, and 2027. Why is a lot of the data from the years between? 
+
