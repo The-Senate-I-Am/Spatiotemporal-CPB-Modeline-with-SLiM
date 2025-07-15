@@ -284,7 +284,7 @@ def cluster_data_to_csv(clusters, output_path='./data/cluster_data.csv'):
 #     cluster_year_snapshot_to_csv(clusters, year, output_path=f'./data/cluster_snapshot_{year}.csv')
 #     print(f"Cluster year snapshot for {year} saved to './data/cluster_snapshot_{year}.csv'.")
     
-CUTOFF = 8000
+CUTOFF = 1500000000
 
 field_data = read_csv('./data/final_data_for_modeling.csv')
 #create_distance_matrix(field_data, cutoff=CUTOFF)

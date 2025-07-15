@@ -48,31 +48,31 @@ initialize()
     for (i in 0:(propDF.nrow-1)) {
         sim.addSubpop("p"+i, asInteger(propDF.getValue("Average Count")[i] * 1000));
     }
-    
+    CUTOFF = 15000;
     
     for (i in 0:(ncol(distMX)-1)) {
         count = 0;
         for (j in 0:(nrow(distMX)-1)) {
-            if (distMX[i+ncol(distMX)*j] > 0) {
+            if (distMX[i+ncol(distMX)*j] < CUTOFF) {
             	count = count + 1;
             }
         }
         if (count > 0) {
             migrationRate = 0.7 / count; // 0.3 chance of not migrating
             for (j in 0:(ncol(distMX)-1)) {
-            	if (i != j & distMX[i+ncol(distMX)*j] > 0) {
+            	if (i != j & distMX[i+ncol(distMX)*j] < CUTOFF) {
                     sim.subpopulations[i].setMigrationRates(sim.subpopulations[j], migrationRate);
             	}
             }
         }
-        if (count == 0) {
+        /*if (count == 0) {
             print("No migration rates set for subpopulation p"+i);
             for (j in 0:(ncol(distMX)-1)) {
             	if (i != j) {
                     sim.subpopulations[i].setMigrationRates(sim.subpopulations[j], 0.0);
             	}
             }
-        }
+        }*/
     }
     
 }
