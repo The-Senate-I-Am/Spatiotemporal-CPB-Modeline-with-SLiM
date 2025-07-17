@@ -153,8 +153,9 @@ def create_cluster_data(field_data, estimate_data=True):
 
 
 
-# This function takes a list of clusters and calculates the distance between each pair of clusters, storing the results in a distance matrix
-def create_cluster_distance_matrix(clusters, cutoff=10000, output_path='./data/cluster_distances.csv'):
+# This function takes a list of clusters and calculates the distance between each pair of clusters, storing the results in a distance matrix 
+#The csv file is outputted to the specified path and returned by the function.
+def create_cluster_distance_matrix(clusters, output_path='./data/cluster_distances.csv'):
     # Function to calculate distance between two coordinates in km using Haversine formula
     def distance(lat1, lon1, lat2, lon2):
         r = 6371  # km
@@ -164,7 +165,7 @@ def create_cluster_distance_matrix(clusters, cutoff=10000, output_path='./data/c
         return int(2 * r * asin(sqrt(a)) * 1000)  # Convert km to meters for more precision
 
     # Create a distance matrix with cluster IDs as both row and column headers
-    grid = np.eye(len(clusters) + 1, dtype=int)
+    grid = np.zeros(len(clusters) + 1, dtype=int)
     for i in range(len(clusters)):
         grid[i + 1][0] = clusters[i].cluster_id 
         grid[0][i + 1] = clusters[i].cluster_id 
@@ -179,11 +180,11 @@ def create_cluster_distance_matrix(clusters, cutoff=10000, output_path='./data/c
             lon2 = clusters[j].longitude
         
             dist = distance(lat1, lon1, lat2, lon2)  # Convert km to meters for more precision
-            if dist <= cutoff:  # Only store distances less than or equal to cutoff
-                grid[i + 1][j + 1] = dist
-                grid[j + 1][i + 1] = dist  # Ensure symmetry in the distance matrix
+            grid[i + 1][j + 1] = dist
+            grid[j + 1][i + 1] = dist  # Ensure symmetry in the distance matrix
 
     np.savetxt(output_path, grid, delimiter=",", fmt='%i')
+    return grid
 
 
 # This function takes a list of clusters and plots their coordinates on a scatter plot, saving the plot to a PNG file
@@ -284,7 +285,6 @@ def cluster_data_to_csv(clusters, output_path='./data/cluster_data.csv'):
 #     cluster_year_snapshot_to_csv(clusters, year, output_path=f'./data/cluster_snapshot_{year}.csv')
 #     print(f"Cluster year snapshot for {year} saved to './data/cluster_snapshot_{year}.csv'.")
     
-CUTOFF = 1500000000
 
 field_data = read_csv('./data/final_data_for_modeling.csv')
 #create_distance_matrix(field_data, cutoff=CUTOFF)
@@ -295,6 +295,6 @@ cluster_coordinates(field_data, n_clusters=num_clusters, iters=2000, random_stat
 
 clusters = create_cluster_data(field_data, estimate_data=True)
 plot_cluster_coordinates(clusters, output_path='./out/cluster_field_locations.png')
-create_cluster_distance_matrix(clusters, cutoff=CUTOFF, output_path='./data/cluster_distances.csv')
+create_cluster_distance_matrix(clusters, output_path='./data/cluster_distances.csv')
 
 cluster_data_to_csv(clusters, output_path='./data/cluster_data.csv')
