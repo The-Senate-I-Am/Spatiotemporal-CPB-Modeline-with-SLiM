@@ -1,4 +1,4 @@
 .vscode/
-/pycache/* 
 /out/*
 /data/*
+/__pycache__

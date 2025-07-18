@@ -6,11 +6,11 @@ import numpy as np
 #These rates are then added up and normalized to sum to 1.
 #The output is a numpy array of migration rates, and the function also saves the migration rates to a CSV file. Specify 'none' for no saving to csv
 def determine_migration_rates(distances, modifier=10000, output_path='./data/migration_rates.csv'):
-    migration_rates = np.zeros((len(distances), len(distances[0])))
+    migration_rates = np.eye(len(distances))
     for i in range(1, len(distances)):
         total_rate = 0
         
-        for j in range(1, distances[i]):
+        for j in range(1, len(distances[i])):
             migration_rates[i][j] = np.exp(-distances[i][j] / modifier)
             total_rate += migration_rates[i][j]
             
