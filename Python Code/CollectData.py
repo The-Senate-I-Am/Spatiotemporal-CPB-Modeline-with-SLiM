@@ -9,7 +9,7 @@ import random
 import DataWrappers
 
 # Read the CSV file and extract important information into a dictionary
-def read_csv(csv_file_path='./data/final_data_for_modeling.csv'):
+def read_csv(csv_file_path='../data/final_data_for_modeling.csv'):
     # Dictionary to store field objects for each unique field_fvid
     field_data = dict()
 
@@ -82,7 +82,7 @@ def create_distance_matrix(field_data, cutoff=10000):
 
 
 # Plotting the coordinates using matplotlib to visualize the field locations
-def plot_coordinates(field_data, output_path='./out/field_locations.png'):
+def plot_coordinates(field_data, output_path='../out/field_locations.png'):
     # Prepare data for plotting
     plot_data = {'Latitude': [], 'Longitude': [], 'Cluster': []}
     for field in field_data.values():
@@ -112,7 +112,7 @@ def plot_coordinates(field_data, output_path='./out/field_locations.png'):
 
 
 # This function takes a list of clusters and plots their coordinates on a scatter plot, saving the plot to a PNG file
-def plot_cluster_coordinates(clusters, output_path='./out/cluster_field_locations.png'):
+def plot_cluster_coordinates(clusters, output_path='../out/cluster_field_locations.png'):
     # Prepare data for plotting
     plot_data = {'Latitude': [], 'Longitude': [], 'Cluster ID': []}
     for cluster in clusters:

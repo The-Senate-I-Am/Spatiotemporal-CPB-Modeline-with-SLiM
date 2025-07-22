@@ -47,7 +47,7 @@ def populate_cluster_objects(field_data, estimate_data=True):
 
 # This function takes a list of clusters and calculates the distance between each pair of clusters, storing the results in a distance matrix 
 #The csv file is outputted to the specified path and returned by the function.
-def create_cluster_distance_matrix(clusters, output_path='./data/cluster_distances.csv'):
+def create_cluster_distance_matrix(clusters, output_path='../data/cluster_distances.csv'):
     # Function to calculate distance between two coordinates in km using Haversine formula
     def distance(lat1, lon1, lat2, lon2):
         r = 6371  # km
@@ -80,7 +80,7 @@ def create_cluster_distance_matrix(clusters, output_path='./data/cluster_distanc
 
 
 # This function takes a list of cluster objects and saves their data to a CSV file
-def cluster_data_to_csv(clusters, output_path='./data/cluster_data.csv'):
+def cluster_data_to_csv(clusters, output_path='../data/cluster_data.csv'):
     # Create a DataFrame to hold the cluster data
     data = {
         'Cluster ID': [],

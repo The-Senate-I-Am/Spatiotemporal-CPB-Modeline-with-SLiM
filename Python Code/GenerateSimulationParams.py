@@ -5,8 +5,8 @@ import numpy as np
 #The function is calculated for each distance in the a row on the distance matrix, including for the case of zero distance. (distance to self).
 #These rates are then added up and normalized to sum to 1.
 #The output is a numpy array of migration rates, and the function also saves the migration rates to a CSV file. Specify 'none' for no saving to csv
-def determine_migration_rates(distances, modifier=10000, output_path='./data/migration_rates.csv'):
-    migration_rates = np.eye(len(distances))
+def determine_migration_rates(distances, modifier=10000, output_path='../data/migration_rates.csv'):
+    migration_rates = np.copy(distances).astype(float)  # Create a copy of distances to store migration rates
     for i in range(1, len(distances)):
         total_rate = 0
         
@@ -15,7 +15,8 @@ def determine_migration_rates(distances, modifier=10000, output_path='./data/mig
             total_rate += migration_rates[i][j]
             
         # Normalize the migration rates for the row
-        migration_rates[i] /= total_rate
+        for j in range(1, len(distances[i])):
+            migration_rates[i][j] /= total_rate
         
     # Save the migration rates to a CSV file
     if output_path.lower() != 'none':
