@@ -7,6 +7,8 @@ import CollectData
 import GenerateSimulationParams
 import GenerateClusterData
 
+#WARNING: don't run this file in VSCode. Run it in the terminal instead.
+
 def main():
     #Start by reading the data from final_data_for_modeling.csv
     field_data = CollectData.read_csv('../data/final_data_for_modeling.csv')

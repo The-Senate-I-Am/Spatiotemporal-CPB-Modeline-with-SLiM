@@ -46,7 +46,7 @@ initialize()
 
 
     for (i in 0:(propDF.nrow-1)) {
-        sim.addSubpop("p"+i, asInteger(propDF.getValue("Average Count")[i] * 1000));
+        sim.addSubpop("p"+i, asInteger(propDF.getValue("Average Count")[i] * 10000));
     }
     CUTOFF = 15000;
     
