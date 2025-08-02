@@ -1,6 +1,15 @@
 // set up a simple neutral simulation
 initialize()
 {
+
+    initializeSLiMOptions(nucleotideBased=T);
+    defineConstant("L", initializeAncestralNucleotides("..\\data\\RefFASTA.txt")); 
+    initializeMutationTypeNuc("m1", 0.5, "f", 0.0);
+    initializeGenomicElementType("g1", m1, 1.0, mmJukesCantor(1e-7));
+    initializeGenomicElement(g1, 0, L-1);
+    initializeRecombinationRate(1e-8);
+
+    /*
 	// set the overall mutation rate
 	initializeMutationRate(1e-7);
 	// m1 mutation type: neutral
@@ -11,42 +20,40 @@ initialize()
 	initializeGenomicElement(g1, 0, 99999);
 	// uniform recombination along the chromosome
 	initializeRecombinationRate(1e-8);
+    */
 }
 // create a population of 500 individuals
 1 early()
 {
-	//sim.addSubpop("p1", 500);
+	
     // Read in cluster data from CSV files
-    if (!fileExists(/*"./data/cluster_distances.csv"*/"C:/Users/sohan/Documents/School/Entomology Research/Codebase/Spatiotemporal-CPB-Modeline-with-SLiM/data/cluster_distances.csv")) {
-        print("distances.csv not found");
+    if (!fileExists("..\\data\\cluster_distances.csv")) {
+        print("cluster_distances.csv not found");
         sim.simulationFinished();
     }
-    distDF = readCSV(/*"./data/cluster_distances.csv"*/"C:/Users/sohan/Documents/School/Entomology Research/Codebase/Spatiotemporal-CPB-Modeline-with-SLiM/data/cluster_distances.csv", colNames=T, sep=",");
+    distDF = readCSV("..\\data\\cluster_distances.csv", colNames=T, sep=",");
     if (isNULL(distDF)) {
-    	print("Could not read distances.csv");
+    	print("Could not read cluster_distances.csv");
     	sim.simulationFinished();
     }
 
-    if (!fileExists(/*"./data/cluster_data.csv"*/"C:/Users/sohan/Documents/School/Entomology Research/Codebase/Spatiotemporal-CPB-Modeline-with-SLiM/data/cluster_data.csv")) {
-        print("distances.csv not found");
+    if (!fileExists("..\\data\\cluster_data.csv")) {
+        print("cluster_data.csv not found");
         sim.simulationFinished();
     }
-    propDF = readCSV(/*"./data/cluster_data.csv"*/"C:/Users/sohan/Documents/School/Entomology Research/Codebase/Spatiotemporal-CPB-Modeline-with-SLiM/data/cluster_data.csv", colNames=T, sep=",");
+    propDF = readCSV("..\\data\\cluster_data.csv", colNames=T, sep=",");
     if (isNULL(propDF)) {
-    	print("Could not read distances.csv");
+    	print("Could not read cluster_data.csv");
     	sim.simulationFinished();
     }
 
 
     distMX = distDF.asMatrix();
 
-    //print(distMX[0, 5]);
-
-    //print(ncol(distMX));
 
 
     for (i in 0:(propDF.nrow-1)) {
-        sim.addSubpop("p"+i, asInteger(propDF.getValue("Average Count")[i] * 10000));
+        sim.addSubpop("p"+i, asInteger(propDF.getValue("Average Count")[i] * 100));
     }
     CUTOFF = 15000;
     
@@ -65,15 +72,9 @@ initialize()
             	}
             }
         }
-        /*if (count == 0) {
-            print("No migration rates set for subpopulation p"+i);
-            for (j in 0:(ncol(distMX)-1)) {
-            	if (i != j) {
-                    sim.subpopulations[i].setMigrationRates(sim.subpopulations[j], 0.0);
-            	}
-            }
-        }*/ 
     }
+
+    
     
 }
 // run to tick 10000

@@ -24,8 +24,6 @@ def generateFASTAFromVCF(refFastaPath, vcfPath, metaPath):
     with open(metaPath, 'r') as f:
         allPositions = [tuple(line.strip().split()) for line in f.readlines()]
     
-    
-    
     currIdx = 0
     finalFasta = ''
     for position in allPositions:
@@ -34,21 +32,17 @@ def generateFASTAFromVCF(refFastaPath, vcfPath, metaPath):
             currIdx += 1
         else:
             finalFasta += ref_seq[int(position[1])]
-        
             
     print(finalFasta)
-        
-    
-    
     
     
     
 
 
-def generateMetaFromVCF(vcfs, metaPath):
+def generateMetaFromVCFs(vcfs, metaPath):
     """
-    Generate a metadata file from VCF files.
-    
+    Generate a metadata file from a list of VCF files. The metadata file will contain all changed
+    chromosome and position pairs.
     Parameters:
     vcfs (list): List of all used VCF file paths.
     refFastaPath (str): Path to the reference FASTA file.
@@ -72,7 +66,8 @@ def generateMetaFromVCF(vcfs, metaPath):
 
 def read_vcf(path):
     """
-    Read a VCF file and return a DataFrame.
+    Read a VCF file and return a DataFrame containing the relevant data. 
+    The DataFrame will have columns for CHROM, POS, and ALT.
     Parameters:
     path (str): Path to the VCF file.
     Returns:
@@ -93,5 +88,5 @@ def read_vcf(path):
     
     
 
-generateMetaFromVCF(['../data/test.vcf'], 'meta.txt')
-generateFASTAFromVCF('../data/ref.fasta', '../data/test.vcf', 'meta.txt')
+# generateMetaFromVCFs(['../data/test.vcf'], 'meta.txt')
+# generateFASTAFromVCF('../data/ref.fasta', '../data/test.vcf', 'meta.txt')
