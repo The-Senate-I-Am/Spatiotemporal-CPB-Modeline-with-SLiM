@@ -3,7 +3,7 @@ initialize()
 {
 
     initializeSLiMOptions(nucleotideBased=T);
-    defineConstant("L", initializeAncestralNucleotides("..\\data\\RefFASTA.txt")); 
+    defineConstant("L", initializeAncestralNucleotides("..\\data\\ref.fasta")); 
     initializeMutationTypeNuc("m1", 0.5, "f", 0.0);
     initializeGenomicElementType("g1", m1, 1.0, mmJukesCantor(1e-7));
     initializeGenomicElement(g1, 0, L-1);
@@ -74,11 +74,52 @@ initialize()
         }
     }
 
+    //Remove the first line of refFastaString which is the header
+    refFastaStrings = readFile("..\\data\\ref.fasta");
+    refFastaString = "";
+    for (s in refFastaStrings) {
+        if (!strprefix(s, ">")) { 
+            refFastaString = refFastaString + s;
+        }
+    }
     
-    
+    //sim.subpopulations[0].outputVCFSample(5);
+
+    sim.subpopulations[0].haplosomes.addNewDrawnMutation(m1, 0, sim.subpopulations[0], "T");
+
+    sim.subpopulations[0].haplosomes.addNewDrawnMutation(m1, 3, sim.subpopulations[0], "T");
+
+    sim.subpopulations[0].haplosomes.addNewDrawnMutation(m1, 12, sim.subpopulations[0], "T");
+
+    print("=======================================================================================");
+    print("=======================================================================================");
+
+    sim.subpopulations[0].outputVCFSample(5);
+
+
+    /*for (i in 0:(propDF.nrow-1)) {
+        fastaPath = "..\\data\\FASTAs\\" + i + ".fasta";
+        if (!fileExists(fastaPath)) {
+            print("FASTA file for subpopulation " + i + " not found");
+            sim.simulationFinished();
+        }
+
+        fastaString = readFile(fastaPath);
+        if (isNULL(fastaString)) {
+            print("Could not read FASTA file for subpopulation " + i);
+            sim.simulationFinished();
+        }
+
+        for (j in 0:(length(refFastaString)-1)) {
+            if (refFastaString[j] != fastaString[j]) {
+                sim.subpopulations[i].haplosomes.addNewDrawnMutation(m1, j, sim.subpopulations[i], fastaString[j]);
+            }
+        }        
+    }*/
 }
 // run to tick 10000
-100 early()
+10000 early()
 {
+    sim.subpopulations[0].outputVCFSample(5);
 	sim.simulationFinished();
 }
