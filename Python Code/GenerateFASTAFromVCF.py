@@ -90,3 +90,5 @@ def read_vcf(path):
 
 # generateMetaFromVCFs(['../data/test.vcf'], 'meta.txt')
 # generateFASTAFromVCF('../data/ref.fasta', '../data/test.vcf', 'meta.txt')
+
+
