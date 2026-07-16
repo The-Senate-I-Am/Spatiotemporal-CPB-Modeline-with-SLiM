@@ -18,7 +18,11 @@ import sys
 
 #WARNING: don't run this file in VSCode. Run it in the terminal instead.
 
-def main(num_clusters, migration_rates_modifier, population_modifier, mutation_rate=2.1e-9, recombination_rate=2.75e-6, silent=False):
+# Fixed KMeans seed so cluster identity (and the subpop->coordinate mapping the IBD slope and
+# every summary statistic depend on) is stable across ABC iterations. See CLAUDE.md 5.6.
+KMEANS_SEED = 42
+
+def main(num_clusters, migration_rates_modifier, population_modifier, total_migration=0.05, mutation_rate=5e-6, recombination_rate=2.75e-6, ancestral_Ne=6700, silent=False):
     #for cleanliness
     warnings.filterwarnings("ignore")
     
@@ -34,7 +38,7 @@ def main(num_clusters, migration_rates_modifier, population_modifier, mutation_r
     field_data = CollectData.read_csv(Path('../data/final_data_for_modeling.csv'))
     
     #Cluster the coordinates using KMeans
-    GenerateClusterData.cluster_coordinates(field_data, n_clusters=num_clusters, iters=2000, random_state=random.randint(0, 1000))
+    GenerateClusterData.cluster_coordinates(field_data, n_clusters=num_clusters, iters=2000, random_state=KMEANS_SEED)
     
     #Put the data for clusters into a list of Cluster objects
     clusters = GenerateClusterData.populate_cluster_objects(field_data, estimate_data=True)
@@ -49,7 +53,7 @@ def main(num_clusters, migration_rates_modifier, population_modifier, mutation_r
     GenerateClusterData.cluster_data_to_csv(clusters, output_path=Path('../data/cluster_data.csv'))
         
     #Generate migration rates based on the cluster distance matrix
-    GenerateSimulationParams.determine_migration_rates(distances, modifier=migration_rates_modifier, output_path=Path('../data/migration_rates.csv'))
+    GenerateSimulationParams.determine_migration_rates(distances, total_migration=total_migration, scale=migration_rates_modifier, output_path=Path('../data/migration_rates.csv'))
     
     #Run the SLiM simulation to create the tree sequence
     if not silent:
@@ -66,7 +70,7 @@ def main(num_clusters, migration_rates_modifier, population_modifier, mutation_r
     #Does recapitation and mutation addition, then gets diversity and divergence statistics
     if not silent:
         print("Recapitating tree sequence...")
-    AnalyzeTreeSeq.analyze_tree_sequence(mutation_rate=mutation_rate, recombination_rate=recombination_rate)
+    AnalyzeTreeSeq.analyze_tree_sequence(mutation_rate=mutation_rate, recombination_rate=recombination_rate, ancestral_Ne=ancestral_Ne)
     if not silent:
         print("Successfully generated diversity and divergence statistics from tree sequence.")
     

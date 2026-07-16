@@ -1,0 +1,115 @@
+#!/usr/bin/env python3
+"""Per-year LD decay (mean r^2 vs physical distance) for each subpopulation.
+
+r^2 is the squared correlation of phased 0/1 haplotype states between pairs of
+SNPs, matching tskit's ld_matrix(stat="r2"). For each population it is averaged
+into physical-distance bins; SNP pairs are pooled across chromosomes into the
+same bins. Writes a per-chromosome and a pooled decay table per year.
+
+Output CSV: first column = distance-bin midpoint (bp), remaining columns =
+mean r^2 for each population (popfile order).
+"""
+import glob, os, re, csv
+import numpy as np, allel
+
+VCF_FILES = sorted(glob.glob("chr*_cpb.vcf.gz"))       # your 17 chromosome files
+POPFILES  = {2015: "popFile2015", 2019: "popFile2019", 2023: "popFile2023"}
+OUTDIR    = "ld_out"
+MAX_DIST  = 100_000     # only consider SNP pairs up to this distance apart (bp)
+BIN_SIZE  = 1_000       # width of each distance bin (bp)
+MIN_MAF   = 0.05        # drop SNPs below this minor-allele freq within the pop
+N_BINS    = MAX_DIST // BIN_SIZE
+
+
+def load_pop(path):
+    """sample_id -> population label (popfile: 'sampleID<TAB>pop')."""
+    d = {}
+    for line in open(path):
+        sid, pop = line.split()[:2]
+        d[sid] = pop
+    return d
+
+
+def haplotypes(vcf):
+    """Return sorted positions and a (n_sites, 2*n_samples) 0/1 haplotype matrix
+    for biallelic SNPs on one chromosome, plus the sample list."""
+    c = allel.read_vcf(vcf, fields=['variants/POS', 'variants/REF',
+                                    'variants/ALT', 'calldata/GT', 'samples'])
+    ref = c['variants/REF'].astype(str)
+    alt = c['variants/ALT'].astype(str)
+    snp = (np.char.str_len(ref) == 1) & (np.char.str_len(alt[:, 0]) == 1)
+    if alt.shape[1] > 1:                       # exclude multiallelic
+        snp &= (np.char.str_len(alt[:, 1:]) == 0).all(axis=1)
+    gt = c['calldata/GT'][snp]                 # (n_snp, n_samples, 2)
+    H = gt.reshape(gt.shape[0], -1)            # haplotypes: sample s -> cols 2s,2s+1
+    return c['variants/POS'][snp], H.astype(np.float64), list(c['samples'])
+
+
+def decay_one_pop(pos, Hp, sum_r2, cnt):
+    """Accumulate summed r^2 and pair counts per distance bin for one population.
+    Pairs are found with a block scheme: every pair within MAX_DIST lies in the
+    same or adjacent MAX_DIST-wide block, so r^2 comes from BLAS matmuls."""
+    freq = Hp.mean(1)
+    keep = (freq > 0) & (freq < 1) & (np.minimum(freq, 1 - freq) >= MIN_MAF)
+    pos, Hp = pos[keep], Hp[keep]
+    if len(pos) < 2:
+        return
+    n_hap = Hp.shape[1]
+    Z = Hp - Hp.mean(1, keepdims=True)
+    Z /= np.sqrt((Z ** 2).mean(1, keepdims=True))         # standardize over haplotypes
+    W = MAX_DIST
+    for b in range(pos[0] // W, pos[-1] // W + 1):
+        a0 = np.searchsorted(pos, b * W); a1 = np.searchsorted(pos, (b + 1) * W)
+        c1 = np.searchsorted(pos, (b + 2) * W)
+        if a1 == a0:
+            continue
+        R2 = ((Z[a0:a1] @ Z[a0:c1].T) / n_hap) ** 2       # (|A|, |cand|)
+        d = pos[a0:c1][None, :] - pos[a0:a1][:, None]      # pairwise distances
+        m = (d > 0) & (d <= W)
+        bins = np.clip((d[m] - 1) // BIN_SIZE, 0, N_BINS - 1)
+        np.add.at(sum_r2, bins, R2[m])
+        np.add.at(cnt, bins, 1)
+
+
+def write(path, sum_r2, cnt, pops):
+    mid = (np.arange(N_BINS) + 0.5) * BIN_SIZE
+    with np.errstate(invalid='ignore'):
+        mean = sum_r2 / cnt                                # (N_BINS, K), NaN where empty
+    w = csv.writer(open(path, "w", newline=""))
+    w.writerow(["dist_bp"] + pops)
+    for i in range(N_BINS):
+        w.writerow([int(mid[i])] +
+                   ["" if cnt[i, k] == 0 else f"{mean[i, k]:.6g}" for k in range(len(pops))])
+
+
+def process_year(year, popfile, vcf_files, outdir):
+    samp2pop = load_pop(popfile)
+    pops = list(dict.fromkeys(samp2pop.values()))          # popfile order
+    K = len(pops)
+    g_sum, g_cnt = np.zeros((N_BINS, K)), np.zeros((N_BINS, K))
+
+    for vcf in vcf_files:
+        chrom = re.search(r"chr[^0-9]*([0-9]+)", os.path.basename(vcf)).group(1)
+        pos, H, samples = haplotypes(vcf)
+        idx = {s: i for i, s in enumerate(samples)}
+        s_sum, s_cnt = np.zeros((N_BINS, K)), np.zeros((N_BINS, K))
+        for k, p in enumerate(pops):
+            cols = [idx[s] for s in samp2pop if samp2pop[s] == p]
+            hap_cols = np.ravel([[2 * c, 2 * c + 1] for c in cols])
+            decay_one_pop(pos, H[:, hap_cols], s_sum[:, k], s_cnt[:, k])
+        write(f"{outdir}/chr{chrom}_{year}_ldDecay.csv", s_sum, s_cnt, pops)
+        g_sum += s_sum; g_cnt += s_cnt
+
+    write(f"{outdir}/averaged_ldDecay_{year}.csv", g_sum, g_cnt, pops)
+    print(f"averaged_ldDecay_{year}.csv: {K} pops, {N_BINS} bins, "
+          f"{int(g_cnt.sum())} SNP pairs")
+
+
+def main():
+    os.makedirs(OUTDIR, exist_ok=True)
+    for year, popfile in POPFILES.items():
+        process_year(year, popfile, VCF_FILES, OUTDIR)
+
+
+if __name__ == "__main__":
+    main()
