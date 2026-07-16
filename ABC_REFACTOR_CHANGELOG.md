@@ -262,10 +262,27 @@ Validated:
 - **Runtime:** ~4 min/trial at POPMULT≈2000 (recapitation-dominated; longer at larger POPMULT),
   so 100 trials ≈ 7+ hours/job. Size jobs accordingly (fewer trials × more jobs is also fine).
 
+## [done] CHTC submit-file alignment — `ABCAnalysisNoRedis.py`
+
+Reviewing the user's `cpb-build.sub` / `run_code.sh` surfaced two code↔submit mismatches, now fixed:
+- **Output filename:** `__main__` now writes the fixed `../out/abc_results.csv` (was
+  `abc_results_job<id>.csv`). The submit file transfers `abc_results.csv` and remaps it
+  per-process, so a fixed name is correct.
+- **`detailed_sim_results`:** `run_abc_simulation` now creates `../out/detailed_sim_results/` and
+  copies each trial's raw feature files into `run<N>/` (previously only `run_sims_from_csv` did).
+  The submit file transfers this dir, so the prior-sampling path had to produce it.
+Verified (stubbed): a run writes `abc_results.csv` + `detailed_sim_results/run1,run2/…`.
+
+Operational items flagged to the user (not code): clone-URL vs push-remote mismatch
+(`The-Senate-I-Am` vs `Sohan-All`), container must activate `cpb-env` + have `slim` on PATH,
+`log/` dir must pre-exist, `run_code.sh` masks python's exit code, OSPool eviction risk on long
+jobs. **These code changes are not yet committed — need commit + push to the cloned repo.**
+
 ## Status summary
 
 - **Done + verified (code):** plan §2a, §2b, §2c, offline standardizer (§4), batched-stats
-  perf fix, prior updates, a full end-to-end integration run, and the CHTC per-job runner.
+  perf fix, prior updates, a full end-to-end integration run, the CHTC per-job runner, and
+  submit-file alignment fixes.
 - **Environment: NOT a blocker.** SLiM 5.1 runs; the pipeline works end to end (~4 min/run,
   recapitation-dominated).
 - **Not started (intentionally deferred):** SLiM `simplificationRatio=INF` fix (§5.5), Tajima's D,

@@ -418,23 +418,28 @@ def run_abc_simulation(num_iterations, output_csv="../out/abc_results.csv"):
     '''
 
     observed_data = getObservedData()
-    
+
     # Determine if we need to write the header
     csv_exists = Path(output_csv).exists()
-    
+
+    # Detail artifact dir (raw-feature store for offline standardization; also transferred back
+    # from CHTC per the submit file).
+    detailed_results_dir = Path(output_csv).parent / "detailed_sim_results"
+    detailed_results_dir.mkdir(parents=True, exist_ok=True)
+
     # Define CSV columns
     # No per-year columns and no total_loss: the combined standardized distance is built offline
     # (plan 4/6). pi/fst/ibd are FITTED; dxy/genrel are DIAGNOSTIC.
     fieldnames = ["iteration", "m", "total_migration", "pop", "numClusters", "mutation_rate", "recombination_rate",
                   "pi_loss", "fst_loss", "ibd_loss", "dxy_loss", "genrel_loss"]
-    
+
     with open(output_csv, mode='a', newline='', encoding='utf-8') as csvfile:
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        
+
         # Write header only if file is new
         if not csv_exists:
             writer.writeheader()
-        
+
         for iteration in range(num_iterations):
             parameters = sample_prior()
             print(
@@ -452,7 +457,16 @@ def run_abc_simulation(num_iterations, output_csv="../out/abc_results.csv"):
                 
                 # Calculate losses
                 losses = calculate_losses(observed_data, simulated_data)
-                
+
+                # Copy raw feature files for this trial into the detail artifact (plan 2c-v/4).
+                iteration_dir = detailed_results_dir / f"run{iteration + 1}"
+                iteration_dir.mkdir(parents=True, exist_ok=True)
+                for year in ["2015", "2019", "2023"]:
+                    for stat in ["diversities", "divergences", "fst", "relatedness"]:
+                        src = Path(f"../data/Output_Data/{stat}_{year}.csv")
+                        if src.exists():
+                            shutil.copy2(src, iteration_dir / f"{stat}_{year}.csv")
+
                 # Prepare row for CSV
                 row = {
                     "iteration": iteration,
@@ -468,18 +482,18 @@ def run_abc_simulation(num_iterations, output_csv="../out/abc_results.csv"):
                     "dxy_loss": losses["dxy_loss"],
                     "genrel_loss": losses["genrel_loss"]
                 }
-                
+
                 # Append to CSV
                 writer.writerow(row)
                 csvfile.flush()  # Ensure data is written immediately
-                
+
                 print(f"  pi={losses['pi_loss']:.4g} fst={losses['fst_loss']:.4g} ibd={losses['ibd_loss']:.4g} "
                       f"dxy={losses['dxy_loss']:.4g} genrel={losses['genrel_loss']:.4g}")
-                
+
             except Exception as e:
                 print(f"  Error in iteration {iteration}: {e}")
                 continue
-    
+
     print(f"Simulation {iteration + 1} complete. Results saved to {output_csv}")
 
 
@@ -491,9 +505,11 @@ if __name__ == "__main__":
     #   [num_trials] how many parameter sets to sample from the prior and run (default 100).
     #
     # Each job samples <num_trials> draws from the prior, runs the full pipeline for each, and
-    # writes one row per trial to ../out/abc_results_job<job_id>.csv (params + per-stat losses,
-    # no total_loss). After all jobs finish: concatenate the per-job CSVs and run abc_standardize.py
-    # to compute sigma and the combined standardized distance D. See ABC_REFACTOR_PLAN.md §4/§6.
+    # writes one row per trial to ../out/abc_results.csv (params + per-stat losses, no total_loss),
+    # plus per-trial raw features under ../out/detailed_sim_results/. The CHTC submit file transfers
+    # both and remaps them per-process (abc_results_<Process>.csv, detailed_sim_results_<Process>).
+    # After all jobs finish: concatenate the per-job CSVs and run abc_standardize.py to compute
+    # sigma and the combined standardized distance D. See ABC_REFACTOR_PLAN.md §4/§6.
     #
     # (The old CSV-driven path is still available programmatically via run_sims_from_csv().)
     if len(sys.argv) < 2:
@@ -508,6 +524,8 @@ if __name__ == "__main__":
     # regardless (it uses the fixed Main.KMEANS_SEED, not the global RNG).
     np.random.seed(job_id)
 
-    output_csv = f"../out/abc_results_job{job_id}.csv"
+    # Fixed filename on purpose: the submit file remaps out/abc_results.csv per-process, so
+    # distinct job_ids don't need distinct filenames here (job_id still seeds the draws above).
+    output_csv = "../out/abc_results.csv"
     print(f"Job {job_id}: sampling {num_trials} prior-drawn trials -> {output_csv}")
     run_abc_simulation(num_trials, output_csv=output_csv)
