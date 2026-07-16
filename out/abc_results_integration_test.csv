@@ -1,2 +1,0 @@
-iteration,m,total_migration,pop,numClusters,mutation_rate,recombination_rate,pi_loss,fst_loss,ibd_loss,dxy_loss,genrel_loss
-0,0.0001,0.05,2000,1,5e-06,2.75e-06,0.2126502596954556,0.01676460302382274,0.00901379916326094,0.02655058451208787,0.0004967580675323142
