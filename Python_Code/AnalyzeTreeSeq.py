@@ -136,7 +136,14 @@ def analyze_tree_sequence(mutation_rate=1e-7, recombination_rate=1e-8, ancestral
         samplesToKeep.extend(ts.samples(population=idx, time=0))
     
     
-    ts = ts.simplify(samples=samplesToKeep)
+    # filter_populations=False is REQUIRED: the default (True) drops unreferenced populations and
+    # renumbers the survivors to be contiguous, which breaks the ts.samples(population=idx) queries
+    # in calculate_diversity_and_divergence (idx = original cluster-row index). With many demes
+    # (e.g. numClusters=99) some are unreferenced after simplify -> renumbering -> a high original
+    # index falls out of range -> empty sample set -> "Sample sets must contain at least one
+    # element". Keeping population indices stable also guarantees correct per-subpop stats at every
+    # cluster count (renumbering would otherwise silently map queries to the wrong deme).
+    ts = ts.simplify(samples=samplesToKeep, filter_populations=False)
     
     next_id = pyslim.next_slim_mutation_id(ts)
     print("Simulating mutations...")
