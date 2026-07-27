@@ -320,8 +320,14 @@ def run_sims_from_csv(input_csv, output_csv="../out/abc_results.csv", simToRun=-
     
     observed_data = getObservedData()
     
-    # Determine if we need to write the header
-    csv_exists = Path(output_csv).exists()
+    # Determine if we need to write the header.
+    # An exists() check alone is not enough: CHTC's run_code.sh pre-creates
+    # out/abc_results.csv (so an evicted job fails with a real exit code instead
+    # of an errno-2 transfer hold), which made every job see a non-empty path,
+    # skip the header, and emit data rows with no column names. Treat a
+    # zero-byte file as needing one; a file with rows already in it does not,
+    # so appending across iterations still works.
+    needs_header = not (Path(output_csv).exists() and Path(output_csv).stat().st_size > 0)
     
     # Create detailed results directory
     output_dir = Path(output_csv).parent
@@ -338,8 +344,8 @@ def run_sims_from_csv(input_csv, output_csv="../out/abc_results.csv", simToRun=-
     with open(output_csv, mode='a', newline='', encoding='utf-8') as csvfile:
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         
-        # Write header only if file is new
-        if not csv_exists:
+        # Write header if the file is new or empty (see needs_header above)
+        if needs_header:
             writer.writeheader()
         
         for iteration, parameters in enumerate(parameters_list):
@@ -419,8 +425,14 @@ def run_abc_simulation(num_iterations, output_csv="../out/abc_results.csv"):
 
     observed_data = getObservedData()
 
-    # Determine if we need to write the header
-    csv_exists = Path(output_csv).exists()
+    # Determine if we need to write the header.
+    # An exists() check alone is not enough: CHTC's run_code.sh pre-creates
+    # out/abc_results.csv (so an evicted job fails with a real exit code instead
+    # of an errno-2 transfer hold), which made every job see a non-empty path,
+    # skip the header, and emit data rows with no column names. Treat a
+    # zero-byte file as needing one; a file with rows already in it does not,
+    # so appending across iterations still works.
+    needs_header = not (Path(output_csv).exists() and Path(output_csv).stat().st_size > 0)
 
     # Detail artifact dir (raw-feature store for offline standardization; also transferred back
     # from CHTC per the submit file).
@@ -436,8 +448,8 @@ def run_abc_simulation(num_iterations, output_csv="../out/abc_results.csv"):
     with open(output_csv, mode='a', newline='', encoding='utf-8') as csvfile:
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
-        # Write header only if file is new
-        if not csv_exists:
+        # Write header if the file is new or empty (see needs_header above)
+        if needs_header:
             writer.writeheader()
 
         for iteration in range(num_iterations):

@@ -1,2 +1,7 @@
-/Python Code/__pycache__
+# Python bytecode. Matches at any depth -- the previous rule was
+# "/Python Code/__pycache__" (space instead of underscore), which matched no
+# real path, so 32 .pyc files ended up tracked.
+__pycache__/
+*.pyc
+
 /.vscode
