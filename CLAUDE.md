@@ -123,7 +123,9 @@ Subpop counts per year: **2015 → 24, 2019 → 17, 2023 → 20.** All four empi
 `Genome Assignment {year}` agree. [VERIFIED]
 
 Notes that have already caused bugs:
-- Subpop sizes range 2–19 diploid individuals. Small ones are very noisy.
+- Subpop sizes range 2–19 diploid individuals. Small ones are very noisy, and the large ones are
+  not free either — at **≥14 individuals** pixy's comparison counter overflows (§6.5). Only
+  `H53-2015` (19) has ever crossed it; 2023's largest is 11.
 - A **typo-duplicated `Arlington` label** produces two near-identical subpopulations. [OPEN —
   decide deliberately whether to merge.]
 - Subpop sets differ between years → matrices have different dimensions and **cannot be aligned
@@ -141,6 +143,7 @@ ConvertBeagleToVCF.py  Beagle -> VCF (one record per line)
 PixyTheFiles.py        runs pixy per chromosome per year -> statsChr{i}_{year}/
 CallableSites.py       per-chromosome callable-site denominators (shared config)
 AverageData.py         pools pixy output -> averaged_{pi,dxy,fst}_{year}.csv
+                       denominators are ANALYTIC, not read from pixy (5.1)
 CalcGenRel.py          per-year relatedness from VCFs -> averaged_genRel_{year}.csv
 CalculateLD,py         per-year, per-subpop LD decay (note the comma in the filename)
 ```
@@ -161,7 +164,8 @@ per-site nucleotide diversity. Confirmed directly from pixy's own output: chr1 `
 `AverageData.py` corrects this by extending the denominator over callable sites:
 
 ```
-comparisons_per_site = count_comparisons / no_sites
+comparisons_per_site = C(2n, 2)        for pi     <- ANALYTIC, from sample size
+                     = (2n_i)(2n_k)    for d_xy
 denominator          = comparisons_per_site * callable_sites
 ```
 
@@ -171,6 +175,11 @@ The numerator needs no adjustment — invariant sites contribute zero difference
 `count_comparisons / no_sites` divides to exact integers: 91 = C(14,2) → 7 diploid individuals,
 231 = C(22,2) → 11. Beagle imputes everything, so comparisons-per-site is constant and the
 extrapolation is exact, not approximate.
+
+That last fact is *why* the denominator is computed from sample size rather than read out of pixy's
+`count_comparisons`, which overflows int32 for large subpops (§6.5). `AverageData.py` still reads
+the field to cross-check and **raises** if it disagrees where pixy could have been right — do not
+soften that guard into a warning.
 
 **Callable sites are provisional.** True callable counts are unrecoverable — the Beagle files hold
 only variant sites, so the upstream filtering was never recorded. `CallableSites.py` uses pixy's
@@ -307,6 +316,14 @@ POPMULT becomes affordable.
 
 ### 6.5 Resolved [VERIFIED]
 
+- **pixy's `count_comparisons` overflowed int32** (fixed 2026-07-28). The field saturates to
+  `INT32_MIN` once `comparisons_per_site × no_sites > 2^31`, i.e. at **≥14 diploid individuals**.
+  Only `H53-2015` (19) ever crossed it, corrupting **244 of 2015's rows** — but just 18 showed a
+  visible sign flip (π = −0.025); the rest, including two `Alsum25` d_xy pairs that saturated on a
+  single chromosome, were merely **~18% high and looked entirely plausible**. Fixed by computing
+  denominators analytically (§5.1). **Still live in two ways:** any future year with ≥14 sampled
+  individuals re-triggers it (2023's max of 308 comparisons/site sits just under the 327.9
+  threshold), and **any `empiricalStats` output produced before 2026-07-28 is suspect.**
 - **Migration saturation.** The old code normalized each row of `exp(-d·modifier)` to sum to 1,
   making ~76% of each subpop's offspring immigrants every generation — effectively panmixia, which
   is why simulated F_st was tiny and d_xy ≈ π. Fixed by the `total_migration`/`scale` split (§2).

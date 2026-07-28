@@ -1,4 +1,4 @@
-# TODO — picked up from the 2026-07-27 session
+# TODO — picked up from the 2026-07-28 session
 
 Remaining work. Project context is in **`CLAUDE.md`**; section references (§) point there.
 
@@ -6,45 +6,56 @@ Split into **pipeline** work (code) and **Sohan** work (data, decisions, profess
 
 ---
 
-## 0. State as of 2026-07-27
+## 0. State as of 2026-07-28
 
-**Done this session — the empirical-statistics recalculation, written and verified but NOT YET
-RUN.**
+**The recalculation has been run.** It exposed an int32 overflow in pixy's `count_comparisons`
+(CLAUDE.md §6.5), which has been fixed and the recalculation re-run.
 
 | file | change |
 |---|---|
-| `ToUseOnBeagles/CallableSites.py` | **new** — per-chromosome callable-site denominators (provisional: pixy `window_pos_2`) |
-| `ToUseOnBeagles/AverageData.py` | rewritten — pools across chromosomes, converts π/d_xy to per-site |
+| `ToUseOnBeagles/CallableSites.py` | **new** (07-27) — per-chromosome callable-site denominators (provisional: pixy `window_pos_2`) |
+| `ToUseOnBeagles/AverageData.py` | rewritten (07-27) — pools across chromosomes, converts π/d_xy to per-site; **07-28: denominators now analytic, with a representability cross-check that raises** |
 | `ToUseOnBeagles/CalcGenRel.py` | callable-site denominator; **row order fixed** to the specifier matrix; headerless output |
 | `Python_Code/ABCAnalysisNoRedis.py` | `abc_results.csv` header written when the file is empty, not just absent |
 
-Verified: pooling math against a hand-computed fixture; the callable-sites guard; all three
-header cases; the specifier-vs-`sorted()` ordering mismatch in all three years.
+Verified 07-28: a synthetic round-trip fixture recovers known π/d_xy to ~1e-9 under both int32
+saturation and modular wrap, and raises on a non-overflow mismatch; the saturating-row count
+predicted from sample sizes alone is **244, matching the real run exactly**; the full three-year
+run completes without raising, which positively confirms `count_missing = 0` and that specifier
+sample counts match pixy's popfile.
 
-**`data/empiricalStats/*.csv` still holds the OLD per-SNP targets.** Nothing downstream changes
-until the recalculation is actually run.
+**`data/empiricalStats/*.csv` still holds the OLD per-SNP targets.** The corrected output is in
+`data/empiricalStats_new/`, **not yet validated and not yet promoted.** Nothing downstream has
+changed.
+
+> The copy of `data/empiricalStats_new/` pulled *before* the overflow fix is contaminated: 2015
+> π/d_xy only, 244 rows, of which only 18 are visibly wrong. If there is any doubt about which
+> copy is on disk, re-pull rather than inspect — `H53-2015` π is negative in the bad one.
 
 ### Immediate next steps
 
-- [ ] **Run the recalculation** on the Beagle machine. Copy the three `ToUseOnBeagles/` files
-      across (`CallableSites.py` is new — easy to forget; both scripts import it), then:
-      ```bash
-      python AverageData.py && python CalcGenRel.py && mkdir -p empiricalStats_new && cp finalStats/averaged_pi_*.csv finalStats/averaged_dxy_*.csv finalStats/averaged_fst_*.csv genRel_out/averaged_genRel_*.csv empiricalStats_new/ && ls -1 empiricalStats_new/
-      ```
-      `CalcGenRel.py` **now needs `specifier_matrix_{year}.csv` in its working directory** — it
-      didn't before. If it exits on a popfile/specifier disagreement, that is the new validation
-      catching a genuine label mismatch.
-- [ ] **Check the printed mean per-site π ≈ 0.0122**, not ~0.14. This is the one number that
-      confirms the correction applied.
-- [ ] **Copy the 12 CSVs into `data/empiricalStats/`**, then **commit and push** — CHTC clones
-      from `origin/main`, so unpushed targets mean CHTC scores against the old per-SNP values
-      while local runs score against the new ones. The two result sets would look poolable and
-      would not be.
+- [ ] **Validate the re-run `empiricalStats_new`** before promoting it. What to check:
+      2015's old/new π ratio uniform at ~11.5 across all 24 rows (it was 13.19, with H53 at
+      −5.67); `H53-2015` π ≈ 0.0124, not negative; `Alsum25 × Refuge` and `Alsum25 × H15` d_xy
+      down from ~0.0148 to ~0.0126; no negative π or d_xy anywhere; **2019/2023 bit-identical to
+      the earlier pull** (zero rows changed for those years, so any difference is a red flag).
+      Mean per-site π printed 2015 → 0.0121171, and 2019/2023 were 0.0123/0.0122.
+- [ ] **Promote:** rename `empiricalStats` → `empiricalStats_old`, `empiricalStats_new` →
+      `empiricalStats`, so the code paths stay unchanged.
+- [ ] **Commit and push** the promoted targets *and* `ToUseOnBeagles/AverageData.py` together —
+      CHTC clones from `origin/main`, so unpushed targets mean CHTC scores against the old
+      per-SNP values while local runs score against the new ones. The two result sets would look
+      poolable and would not be. Committing the script alongside keeps the provenance of the
+      numbers with the numbers.
 - [ ] **Delete `Python_Code/abc_results.csv`** (header-only, pre-refactor column layout).
       Precautionary — it has zero data rows.
 - [ ] **Never pool ABC results produced before this fix** with results produced after. Rejection
       ABC pools trivially across jobs and submissions, which is exactly what makes it easy to
       concatenate incompatible batches by accident.
+- [ ] **Optional:** add the overflow fixture test to the repo. `ToUseOnBeagles/` has no tests, and
+      this bug class is invisible in the output for any subpop under 14 individuals. The working
+      version is in the session scratchpad (`test_averagedata.py`); it needs the `SRC` path made
+      relative before it is worth committing.
 
 ---
 
