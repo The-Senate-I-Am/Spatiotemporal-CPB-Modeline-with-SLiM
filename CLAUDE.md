@@ -39,7 +39,9 @@ mutation_rate, recombination_rate, ancestral_Ne=6700)`:
 2. Writes `data/cluster_data.csv` and `data/cluster_distances.csv` — **overwriting in place.**
 3. `GenerateSimulationParams.determine_migration_rates(distances, total_migration, scale, ...)`
    → `data/migration_rates.csv`.
-4. `slim -d POPMULT=<pop> SLiM_Code/CPBSampleSim{Win,Linux}.slim` → `out/simTreeSeq.trees`.
+4. `slim -d POPMULT=<pop> -d RECOMB=<r> SLiM_Code/CPBSampleSim{Win,Linux}.slim` →
+   `out/simTreeSeq.trees`. Neither constant has a default inside the `.slim` files — an absent
+   `-d` is a loud `undefined identifier` error, not a silent fallback to a different scale.
 5. `AnalyzeTreeSeq.analyze_tree_sequence(..., ancestral_Ne=6700)` — recapitate → simplify →
    overlay mutations → write, per year, `diversities`, `divergences` (d_xy), `fst`, and
    `relatedness` matrices under `data/Output_Data/`. Pairwise stats use **single batched
@@ -81,17 +83,50 @@ python 3.12.** Internally consistent SLiM-5 stack; the pipeline runs end to end.
 > An older note claimed "SLiM 4.3 tree sequences need pyslim 1.0.x; pyslim 1.1+ fails." That
 > described the *old* env. Do **not** downgrade pyslim on this env.
 
-Per-run cost [VERIFIED, POPMULT=2000, fsync-timed]: SLiM forward sim ~3 s; `analyze_tree_sequence`
-~250 s, of which **recapitation is ~246 s (~98%)**. The batched π/d_xy/F_st/relatedness stats are
-~1 s total. Recapitation (coalescing ~42k lineages at r=2.75e-6 over 1e6 bp) is the throughput
-bottleneck, **not** the statistics. Roughly **4 min/trial** at POPMULT≈2000. Simplify-before-
-recapitate was considered and **declined** (unsafe without `keep_input_roots=True`; benefit is
-local-only, since CHTC parallelizes).
+### 3.1 Per-run cost [VERIFIED 2026-07-31, measured post-§6.3/§6.4, numClusters=33]
+
+All on one 15.2 GB Windows box. Peak memory is the OS high-water mark (`peak_wset`), tracked
+separately for the SLiM child and the Python process — **they do not overlap**, SLiM has exited
+before recapitation starts.
+
+| POPMULT | SLiM time | SLiM peak | `.trees` | analysis time | **analysis peak** | total |
+|---|---|---|---|---|---|---|
+| 500 | 4.0 s | 173 MB | 21.1 MB | ~274 s | 611 MB | 4.5 min |
+| 5000 | 50.9 s | 1672 MB | 216.5 MB | 1764 s | **7632 MB** | **30.3 min** |
+| 12000 | 169.6 s | 3938 MB | 519.8 MB | — **OOM** — | ≈20 GB (est.) | — |
+
+**Scaling, measured, not assumed:**
+- **SLiM memory and `.trees` are linear in POPMULT** (9.7× and 2.36× against 10× and 2.4×). This
+  is what confirms §6.4's fix works — with `simplificationRatio=INF` the edge table grew with
+  generations×individuals instead.
+- **Analysis-phase memory is SUPERLINEAR**, exponent ≈1.10 (12.5× for 10×). A linear
+  extrapolation *under*-predicts: it gave 6.1 GB at POPMULT=5000 against 7632 MB measured.
+- **Analysis time is SUBlinear** (6.4× for 10×), projecting **~60 min/trial at POPMULT=12000**.
+
+**Recapitation is still the bottleneck** — ~97% of wall time, and it is where the memory goes.
+
+> **POPMULT=12000 OOMs on a 16 GB machine.** Killed inside `pyslim.recapitate`, before the
+> `Simplifying tree sequence...` print. This is **not** a §6.4 regression: the forward phase
+> completed fine at 3.9 GB. It is the memory floor §6.4 says simplification cannot touch — gens
+> 308/316 permanently Remember *every* individual in *every* subpop, so recapitation faces ~240k
+> sample nodes.
+
+**CHTC sizing:** ~8 GB for POPMULT≈5000, ~20 GB for 12000, 30–60 min/trial. The prior ceiling is
+12000, so **undersized `request_memory` would hold jobs mid-pass** — and rejection ABC pools
+whatever survives, biasing the posterior toward draws small enough to finish. Size for the ceiling.
+
+**Simplify-before-recapitate** was considered and **declined** (§9 `AnalyzeTreeSeq.py:126,146`
+recapitates the full tree sequence and only then simplifies to the ~2.4k genomes actually
+sampled). Two-thirds of that reasoning is now known to be wrong: it is *safe* with
+`keep_input_roots=True` (pyslim documents exactly this), and the benefit is **not** local-only —
+it is the difference between running and OOMing at POPMULT ≳ 9000, on CHTC nodes too. Left
+unchanged deliberately (2026-07-31): nothing is broken, and CHTC can request more memory.
+**Revisit if memory or throughput becomes binding.**
 
 Total simulated N is **not** POPMULT. Subpop size is `Average Count × POPMULT / numSubpops`, so
-`total N ≈ POPMULT × mean(Average Count) ≈ 3.33 × POPMULT`. An older OOM (POPMULT≈40000 crashed a
-128 GB machine) still stands as a caution; `simplificationRatio=INF` (§6.4) is unfixed, so keep
-POPMULT modest.
+`total N ≈ POPMULT × mean(Average Count) ≈ 3.33 × POPMULT`. The older OOM (POPMULT≈40000 on a
+128 GB machine) predates the §6.4 fix; the forward phase is now linear and cheap, so if that
+recurs it will be recapitation again, not the edge table.
 
 ---
 
@@ -123,11 +158,13 @@ Subpop counts per year: **2015 → 24, 2019 → 17, 2023 → 20.** All four empi
 `Genome Assignment {year}` agree. [VERIFIED]
 
 Notes that have already caused bugs:
-- Subpop sizes range 2–19 diploid individuals. Small ones are very noisy, and the large ones are
+- Subpop sizes range 2–19 diploid individuals. Small ones are very noisy — quantified in §7.0, and
+  the reason `EXCLUDE_SMALL_SUBPOPS` drops n ≤ 3 from the fitted statistics. The large ones are
   not free either — at **≥14 individuals** pixy's comparison counter overflows (§6.5). Only
   `H53-2015` (19) has ever crossed it; 2023's largest is 11.
 - A **typo-duplicated `Arlington` label** produces two near-identical subpopulations. [OPEN —
-  decide deliberately whether to merge.]
+  decide deliberately whether to merge.] Note the small-subpop mask already drops `Arlington2015`
+  (n=2) from the **fitted** statistics, so this currently bites only the diagnostics (§7.0).
 - Subpop sets differ between years → matrices have different dimensions and **cannot be aligned
   element-wise across years.**
 
@@ -293,26 +330,72 @@ Regardless: π depends on N and μ only through **θ = 4Nμ** — they are confo
 free, the posterior is a *ridge*, not a peak, and a peaked-looking N marginal is an artefact.
 Report **θ=4Nμ** and **Nm**.
 
-### 6.3 `recombination_rate` never reaches the forward simulation [VERIFIED]
+**Partial answer [VERIFIED 2026-07-31]: N *is* identifiable — through F_st, not through π.**
+A two-point POPMULT sweep at μ=5e-6, `total_migration=0.05`, numClusters=33:
 
-`CPBSampleSimLinux.slim:12` hardcodes `initializeRecombinationRate(1e-8)`. The ABC parameter is
-passed **only** to `pyslim.recapitate()`, so it cannot affect forward dynamics. It is currently
-fixed (not inferred) at `DEFAULT_RECOMBINATION_RATE = 2.75e-6`.
+| POPMULT | subpop size | Nm | sim F_st | **fst_loss** | sim π | **pi_loss** |
+|---|---|---|---|---|---|---|
+| 500 | ~50 | 2.5 | 0.0754–0.0778 | 0.0719 | 9.5e−2 | 2.043 |
+| 5000 | ~505 | 25 | 0.0076–0.0082 | **0.00829** | 1.17e−1 | **2.262** |
+| *observed* | — | 31–83 | 0.0032–0.0083 | — | 1.22e−2 | — |
 
-Separately, recombination has **no signal at all** in π/d_xy/F_st — it shows up only in linkage
-disequilibrium. Inferring it requires an LD summary statistic. Fix: pass it in as a `-d` constant
-like `POPMULT`.
+F_st tracks `1/(1+4Nm)` almost exactly and `fst_loss` improves **8.7×**. So the structural side
+carries real information about N. Do not conclude "N is unidentifiable" from the π argument alone.
 
-### 6.4 `simplificationRatio=INF` is the memory bug [VERIFIED, fix untested]
+**But the two fitted statistics currently pull in opposite directions.** The POPMULT that fits
+F_st drives π *further* from target (9.7× too high at POPMULT=5000, up from 7.8× at 500), because
+μ is fixed far too high. **No POPMULT satisfies both.** Running the pass in this state optimizes a
+tradeoff that is an artifact of a miscalibrated μ, not a feature of the data.
 
-`CPBSampleSimLinux.slim:4` sets `initializeTreeSeq(simplificationRatio=INF)`, telling SLiM to
-**never simplify during the forward run.** The edge table grows unbounded for all 324 generations.
-Combined with `treeSeqRememberIndividuals(..., T)` at gens 308 and 316, this is almost certainly
-the real cause of the OOM — not the mutation rate.
+This also **pins the μ recalibration empirically**: matching π at POPMULT=5000 and Ne=6700 needs
+μ ≈ **5.2e-7**, against the **4.6e-7** predicted independently by §6.1's π arithmetic — two routes
+agreeing to ~15%. Both are ~250× the biological rate, which is the §6.1 problem restated.
 
-**[OPEN]** Removing it (letting SLiM auto-simplify) is untested but is the obvious first thing to
-try. If it works, the "must inflate μ to keep the sim tractable" premise dissolves and large
-POPMULT becomes affordable.
+### 6.3 `recombination_rate` now reaches the forward simulation [FIXED 2026-07-29]
+
+Was: `CPBSampleSim{Linux,Win}.slim:12` hardcoded `initializeRecombinationRate(1e-8)`, so the ABC
+parameter reached **only** `pyslim.recapitate()` and could not affect forward dynamics. Both files
+now take `initializeRecombinationRate(RECOMB)` and `Main.py` passes `-d RECOMB=`. Verified against
+SLiM 5.1: `-d RECOMB=2.75e-06` (the format Python's `!r` emits) parses; omitting it errors with
+`undefined identifier RECOMB` and exit 1, which `check=True` on the subprocess turns into a raise.
+
+**This is a 275× increase in forward recombination** (1e-8 → 2.75e-6), so expect many more edges
+per generation and materially higher SLiM memory/runtime than any historical measurement. It is
+the main reason §6.4 had to be fixed at the same time.
+
+Still fixed, not inferred, at `DEFAULT_RECOMBINATION_RATE = 2.75e-6`: recombination has **no
+signal at all** in π/d_xy/F_st — it shows up only in linkage disequilibrium, so inferring it needs
+an LD summary statistic first.
+
+### 6.4 `simplificationRatio=INF` removed [FIXED 2026-07-29, unrun]
+
+Was: `CPBSampleSim{Linux,Win}.slim:4` set `initializeTreeSeq(simplificationRatio=INF)`, telling
+SLiM to **never simplify during the forward run**, so the edge table grew unbounded for all 324
+generations — almost certainly the real cause of the OOM, not the mutation rate. Now plain
+`initializeTreeSeq(timeUnit="generations")`, i.e. SLiM's default ratio of 10.
+
+**Safe — checked against the docs, not assumed.** Simplification is lossless for the genealogy of
+retained samples; SLiM retains all living individuals plus everything permanently Remembered
+(`treeSeqRememberIndividuals(..., T)` at gens 308/316 — `permanent=T` marks them as real samples),
+and future generations descend only from living individuals, so nothing needed later is discarded.
+Recombination is unaffected: breakpoints are recorded at reproduction, and simplification runs
+afterwards on the already-written tables. The manual frames `simplificationRatio` purely as a
+speed/memory tradeoff.
+
+> The recapitation hazard is real but belongs to the **other** mechanism. Recapitation needs the
+> input roots, and pyslim is explicit that a *Python-side* `ts.simplify()` before recapitating must
+> pass `keep_input_roots=True` — that is why §3 declined simplify-before-recapitate. SLiM's own
+> runtime simplification already uses `keep_input_roots`, which is why ordinary SLiM output (SLiM
+> simplifies every ~20 ticks by default) is routinely recapitable. Do not conflate the two.
+
+**[OPEN] Not yet run end-to-end.** Output will not be bit-identical (nodes are renumbered,
+redundant edges merged); compare **branch-mode diversity under a fixed recapitation seed**, not
+file hashes.
+
+**Memory floor this cannot touch:** gens 308/316 permanently Remember *every individual in every
+subpop*, pinning all of their ancestry. Downstream only 2–19 individuals per site are ever
+sampled, so Remembering a bounded subset (say 50/subpop) would cut retained ancestry a lot. That
+changes what is available to the sampler, so it is a design decision, not a free win.
 
 ### 6.5 Resolved [VERIFIED]
 
@@ -348,8 +431,30 @@ POPMULT becomes affordable.
 In ABC there is no gradient-descent "loss." This is the **distance** `d(S_sim, S_obs)` used for
 rejection/weighting; it only has to *rank* parameter draws sensibly.
 
-**Fitted:** element-wise **log-π**, off-diagonal **F_st**, **IBD slope**.
-**Diagnostic (computed, not fitted):** **d_xy**, **genetic relatedness**.
+**Fitted:** element-wise **log-π**, off-diagonal **F_st**.
+**Diagnostic (computed, not fitted):** **IBD slope**, **d_xy**, **genetic relatedness**.
+
+> **IBD was demoted from fitted on 2026-07-29** (§7.1). The switch that actually matters is
+> `abc_standardize.py::FITTED_STATS`; `calculate_losses` still returns `ibd_loss`.
+
+### 7.0 Small-subpop exclusion [VERIFIED]
+
+`ABCAnalysisNoRedis.py` has `EXCLUDE_SMALL_SUBPOPS = True`, `MIN_SUBPOP_N = 4`. Subpops with
+fewer than 4 diploid individuals are dropped from the **fitted** statistics via
+`get_keep_mask(year)`, a boolean mask in specifier-matrix row order applied identically to the
+observed and simulated sides.
+
+Why: at n ≤ 3, **46.7% of 2015's pairs return a negative F_st** (vs 5.3% at 4≤n≤7 and 0% at n≥8) —
+those entries scatter around a noise floor rather than measuring differentiation.
+
+Only 2015 is affected. It drops exactly two sites — **`Arlington2015` (n=2) and `H67-2015` (n=2)**
+— removing exactly the 45 noise-floor pairs. **Side effect worth knowing:** `Arlington2015` is the
+typo duplicate (§4), so for the fitted statistics the duplicated-`Arlington` ambiguity is now moot
+— only `Arlington-2015` (n=4) survives. The underlying data question is still open.
+
+**Relatedness is deliberately NOT masked** — it is centred on the populations present when it was
+computed, so slicing rows/cols is not the same as recomputing on the subset (invariant 2). Both
+sides stay full-size. π, F_st and d_xy are all safe to slice.
 
 `calculate_losses` returns per-statistic, un-standardized, count-normalized distances (mean over
 entries within a year, then mean over years):
@@ -357,10 +462,85 @@ entries within a year, then mean over years):
 ```
 pi_loss     = mean_years( mean_i | log pi_sim,i - log pi_obs,i | )   <- fitted, log-space
 fst_loss    = mean_years( mean_pairs | Fst_sim - Fst_obs | )         <- fitted
-ibd_loss    = mean_years( | slope_sim - slope_obs | )                <- fitted
+ibd_loss    = mean_years( | slope_sim - slope_obs | )                <- diagnostic (was fitted)
 dxy_loss    = mean_years( mean_pairs | dxy_sim - dxy_obs | )         <- diagnostic
 genrel_loss = mean_years( mean_pairs | R_sim - R_obs | )             <- diagnostic
 ```
+
+### 7.1 Why IBD is not fitted [VERIFIED 2026-07-29]
+
+**The observed IBD slope is indistinguishable from zero in all three years.** Mantel test, 9999
+permutations of site labels, using the project's own `ibd_slope`/`get_site_geo_distances`:
+
+| year | n | pairs | slope | Mantel r | **p (two-sided)** | \|slope\|/null_sd |
+|---|---|---|---|---|---|---|
+| 2015 | 24 | 550 | −1.42e−03 | −0.069 | **0.639** | 0.46 |
+| 2019 | 17 | 272 | +5.03e−04 | +0.214 | **0.148** | 1.43 |
+| 2023 | 20 | 380 | +5.53e−05 | +0.004 | **0.985** | 0.02 |
+
+The sign flips across years — noise, not a weak real effect. **Identical conclusion on the old
+per-SNP targets**, so this does not depend on the denominator fix.
+
+A Mantel test is required here, not an OLS p-value: `ibd_slope` fits over all n(n−1) ordered
+off-diagonal pairs (552 for 2015, from 24 sites), which are massively non-independent — every site
+appears in 23 of them. An OLS p-value would treat correlated pairs as independent observations and
+report significance almost regardless of signal. Permuting **site labels** is the exchangeable unit.
+
+Consequences:
+- **`scale` (dispersal-kernel decay) is unidentifiable from these data.** Fix it or report it as
+  unidentified. Do not present it as inferred.
+- Fitting a target that is noise adds a pure-noise term to the standardized `D`, costing
+  acceptance efficiency and blurring the parameters that *are* identifiable.
+- **`total_migration` is probably still identifiable, via the F_st level rather than IBD:** at
+  mean F_st ≈ 0.003–0.008, **Nm ≈ 31–83**.
+
+**Geographic scale is not the explanation** — sites span 1.7–160 km, median pairwise ~34 km, in all
+three years. That is ample range to detect IBD in an insect. And **Rousset's slope assumes
+drift–dispersal equilibrium**, which is questionable for a recent fast-spreading invader
+(Whitlock & McCauley 1999), so a null result does not cleanly mean "no IBD" — it can equally mean
+"not at equilibrium yet."
+
+### 7.2 F_st carries real signal, but it is site-coherent, not distance-structured [VERIFIED]
+
+F_st was checked for sample-size noise-domination before being left as the sole structural fitted
+statistic. **It is not noise-dominated.** Spearman rho between `min(n_i,n_j)` and `|F_st|`, with
+site-label permutation: 2015 −0.082 (p=0.63), 2019 +0.242 (p=0.23), 2023 +0.082 (p=0.71). No
+association. (2019 has almost no leverage — sizes are 5–7.)
+
+Instead, **each year's extremes converge on a single site**, which is what real differentiation
+looks like and noise does not:
+
+- **`Mortensen9-2015`** (n=5): mean F_st 0.0686, **5.7× the next-highest site.**
+- **`H41-2023`** (n=7): mean F_st 0.0472, **3× the next-highest.**
+- 2019: no isolate at all; max pairwise F_st 0.0092.
+
+**These are almost certainly a within-site sampling artifact, not landscape structure. [INFERRED,
+strong]** Both isolates are simultaneously the **lowest-π** and (near-)**highest within-site
+relatedness** site in their year:
+
+| year | corr(mean F_st, π) | corr(mean F_st, self-relatedness) | isolate |
+|---|---|---|---|
+| 2015 | **−0.721** | +0.339 | `Mortensen9-2015`: π rank 1 (lowest), selfRel rank 3 |
+| 2019 | −0.380 | −0.089 | — |
+| 2023 | **−0.915** | **+0.748** | `H41-2023`: π rank 1 (lowest), selfRel rank 1 |
+
+Low within-site diversity + high within-site relatedness + high F_st against everything is the
+signature of **a sample of close relatives** (e.g. beetles taken off one plant or one egg mass —
+entirely plausible for CPB) or a recent founder/bottleneck event at that field. Either way it is a
+*local* phenomenon the landscape migration model cannot and should not reproduce.
+
+**Geography rules out the innocent explanation.** The isolates are geographically *ordinary*:
+`Mortensen9-2015` ranks 19/24 on mean distance to other sites, `H41-2023` ranks 17/20. Meanwhile
+the genuinely remote sites are undifferentiated — `Alsum59-2023` is the most remote (114.6 km) and
+ranks 11/20 on F_st. corr(mean F_st, mean distance) = −0.065 / +0.251 / +0.014.
+
+Two implications:
+1. **The dispersal kernel may be misspecified.** The data says "one site is an isolate, the rest
+   are near-panmictic"; an exponential distance-decay kernel with one global `total_migration`
+   produces smooth structure and cannot make a single deme an isolate. Element-wise F_st fitting
+   will be dominated by pairs the model structurally cannot match.
+2. **π and F_st are not independent statistics here** (r = −0.72 / −0.92 in 2015/2023). Fitting
+   both with equal weight after MAD-standardization partly double-counts one signal.
 
 **There is deliberately no `total_loss` during the pass.** The combined standardized distance
 `D = sqrt(Σ_j w_j (loss_j/σ_j)²)` with `σ_j = 1.4826·MAD` is built **offline** by
@@ -384,6 +564,8 @@ Rationale for the choices:
   to ~0) and measures the same signal as F_st. Kept as a **posterior-predictive check**: a
   statistic you didn't fit is far better validation than one you did.
 - **Normalize out year entry counts** so 24- vs 17- vs 20-subpop years contribute comparably.
+- **IBD is retained as a diagnostic** for the same reason — with the slope no longer fitted, a
+  simulated-vs-observed slope comparison becomes an honest posterior-predictive check.
 
 Verified behaviour [VERIFIED]: `calculate_losses(obs, obs)` → all five losses exactly 0.0.
 Perturbed sim (π×1.1, F_st+0.02) → `pi_loss = 0.0953 = ln(1.1)` exactly, `fst_loss = 0.02`.
@@ -393,12 +575,12 @@ Real-data IBD slopes finite: 2015 −1.42e-3, 2019 +8.04e-4, 2023 +1.44e-4 (weak
 
 | parameter | prior | note |
 |---|---|---|
-| `m` (kernel decay) | `lognorm(s=1.5, scale=1e-4)` | reshapes *where* migrants come from |
+| `m` (kernel decay) | `lognorm(s=1.5, scale=1e-4)` | **unidentifiable — IBD is not fitted (§7.1)** |
 | `total_migration` | `U(0.001, 0.301)` | **placeholder ceiling** — needs a biological bound |
 | `pop` (POPMULT) | `U(2000, 12000)` | ≈ 6.7k–40k individuals |
 | `numClusters` | {1,2,3} | **CSV records the raw draw; actual count is ×33** |
 | `mutation_rate` | `lognorm(s=0.5, scale=5e-6)` | **calibrated to the broken π target — rebuild** |
-| `recombination_rate` | fixed 2.75e-6 | not inferred (§6.3) |
+| `recombination_rate` | fixed 2.75e-6 | now reaches SLiM too (§6.3); still not inferred |
 
 ---
 
@@ -431,11 +613,11 @@ Real-data IBD slopes finite: 2015 −1.42e-3, 2019 +8.04e-4, 2023 +1.44e-4 (weak
 |---|---|
 | `Python_Code/Main.py` | Pipeline entrypoint (§2). Threads `total_migration`, `ancestral_Ne`; `KMEANS_SEED = 42`. |
 | `Python_Code/AnalyzeTreeSeq.py` | Recapitate → simplify → mutate → π, d_xy, F_st, relatedness (batched `indexes=`). |
-| `Python_Code/ABCAnalysisNoRedis.py` | ABC driver, `calculate_losses`, IBD helpers (`get_site_geo_distances`, `ibd_slope`). CHTC entrypoint: `python ABCAnalysisNoRedis.py <job_id> [num_trials]` → `../out/abc_results.csv`. Seeds `np.random.seed(job_id)`. |
-| `Python_Code/abc_standardize.py` | **Offline** post-processing: σ=1.4826·MAD per fitted stat → standardized `D` → ranked CSV + frozen σ JSON. Not run in the pass loop. |
+| `Python_Code/ABCAnalysisNoRedis.py` | ABC driver, `calculate_losses`, IBD helpers (`get_site_geo_distances`, `ibd_slope`), `get_keep_mask` + `EXCLUDE_SMALL_SUBPOPS`/`MIN_SUBPOP_N` (§7.0). CHTC entrypoint: `python ABCAnalysisNoRedis.py <job_id> [num_trials]` → `../out/abc_results.csv`. Seeds `np.random.seed(job_id)`. |
+| `Python_Code/abc_standardize.py` | **Offline** post-processing: σ=1.4826·MAD per fitted stat → standardized `D` → ranked CSV + frozen σ JSON. Not run in the pass loop. **`FITTED_STATS` here is what actually decides what enters `D`.** |
 | `Python_Code/GenerateSimulationParams.py` | `determine_migration_rates(distances, total_migration, scale, ...)`. |
 | `Python_Code/GenerateClusterData.py` | KMeans clustering, distance matrix, genome→cluster assignment (`assign_genomes_to_clusters_idv_year` sets subpop→specifier-row mapping). |
-| `SLiM_Code/CPBSampleSim{Linux,Win}.slim` | Forward sim. Neutral, `mutationRate(0)`, `simplificationRatio=INF` (§6.4, unfixed). |
+| `SLiM_Code/CPBSampleSim{Linux,Win}.slim` | Forward sim. Neutral, `mutationRate(0)`. Takes `-d POPMULT` and `-d RECOMB` (§6.3), default simplification (§6.4). The two files are identical apart from path separators — **fix both or neither.** |
 | `diagnostics/qdriver.py` | Controlled sweep/rescaling harness: fixed KMeans seed, templated SLiM, scalable migration, reports branch-mode diversity. |
 | `diagnostics/qpost.py` | Post-process an existing `.trees` → branch diversity, site π, F_st. Fast; no SLiM needed. |
 | `ToUseOnBeagles/*` | Empirical-side pipeline (§5). Runs on the Beagle machine, not here. |

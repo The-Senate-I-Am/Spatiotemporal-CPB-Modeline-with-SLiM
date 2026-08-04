@@ -15,8 +15,12 @@ of losses across the whole run set -- the run set is its own pilot batch. This s
 Default sigma granularity: per-statistic, computed from the loss columns (plan §3.2 default).
 The detailed_sim_results/ raw-feature store enables a finer per-entry sigma later if wanted.
 
-FITTED (enter D):      pi_loss (log-space), fst_loss, ibd_loss
-DIAGNOSTIC (not in D): dxy_loss, genrel_loss   -- kept for posterior-predictive checks.
+FITTED (enter D):      pi_loss (log-space), fst_loss
+DIAGNOSTIC (not in D): ibd_loss, dxy_loss, genrel_loss   -- kept for posterior-predictive checks.
+
+ibd_loss was demoted from fitted: the observed IBD slope is indistinguishable from zero in all
+three years (Mantel, 9999 perms: p = 0.64 / 0.15 / 0.99), so it contributed noise to D rather
+than signal. See CLAUDE.md 7.
 """
 import json
 import numpy as np
@@ -27,7 +31,7 @@ from pathlib import Path
 RESULTS_CSV   = Path("../out/abc_results.csv")          # input: the pass results
 RANKED_CSV    = Path("../out/abc_results_ranked.csv")   # output: results + D, sorted
 SIGMAS_JSON   = Path("../out/abc_sigmas.json")          # output: frozen sigmas
-FITTED_STATS  = ["pi_loss", "fst_loss", "ibd_loss"]     # statistics that enter the distance D
+FITTED_STATS  = ["pi_loss", "fst_loss"]                 # statistics that enter the distance D
 WEIGHTS       = None            # None -> equal weights (1/len(FITTED_STATS)); else dict per stat
 ACCEPT_FRAC   = 0.20            # fraction of runs to flag as 'accepted' (top by smallest D)
 # ------------------------------------------------------------------

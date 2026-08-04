@@ -61,11 +61,16 @@ def main(num_clusters, migration_rates_modifier, population_modifier, total_migr
     
     #Run the appropriate SLiM script based on the operating system, passing in the population modifier as a parameter
     if platform.system() == "Windows":
-        subprocess.run(['slim', '-l', '0', '-d', f'POPMULT={population_modifier}', str(Path('../SLiM_Code/CPBSampleSimWin.slim'))])
+        slim_script = Path('../SLiM_Code/CPBSampleSimWin.slim')
     elif platform.system() == "Linux":
-        subprocess.run(['slim', '-l', '0', '-d', f'POPMULT={population_modifier}', str(Path('../SLiM_Code/CPBSampleSimLinux.slim'))])
+        slim_script = Path('../SLiM_Code/CPBSampleSimLinux.slim')
     else:
         raise OSError(f"Unsupported operating system: {platform.system()}")
+
+    subprocess.run(['slim', '-l', '0',
+                    '-d', f'POPMULT={population_modifier}',
+                    '-d', f'RECOMB={recombination_rate!r}',
+                    str(slim_script)], check=True)
     
     #Does recapitation and mutation addition, then gets diversity and divergence statistics
     if not silent:

@@ -3,5 +3,6 @@
 # real path, so 32 .pyc files ended up tracked.
 __pycache__/
 *.pyc
-
+*.trees
+*.pdf
 /.vscode

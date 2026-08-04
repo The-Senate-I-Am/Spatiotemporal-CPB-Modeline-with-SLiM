@@ -1,7 +1,7 @@
 // set up a simple neutral simulation
 initialize()
 {
-    initializeTreeSeq(simplificationRatio=INF, timeUnit="generations");
+    initializeTreeSeq(timeUnit="generations");
     //initializeMutationRate(1e-7); uncomment for non-neutral simulations
     initializeMutationRate(0);
     //initializeMutationType("m1", 0.5, "f", 0.1);
@@ -9,7 +9,7 @@ initialize()
     m1.convertToSubstitution = F;
     initializeGenomicElementType("g1", m1, 1);
     initializeGenomicElement(g1, 0, 1e6 - 1);
-    initializeRecombinationRate(1e-8);
+    initializeRecombinationRate(RECOMB);
 } 
 
 

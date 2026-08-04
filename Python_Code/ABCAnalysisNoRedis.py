@@ -30,6 +30,14 @@ prior_distributions = {
     "mutation_rate": stats.lognorm(s=0.5, scale=DEFAULT_MUTATION_RATE),  # nuisance diversity-scaler ~5e-6 (see note above)
 }
 
+# --- Fitted-statistic configuration (CLAUDE.md 7) --------------------------------------------
+# Subpops sampled too thinly for a usable pairwise Fst are dropped from the FITTED statistics.
+# At n<=3 diploids, 46.7% of 2015's pairs return a NEGATIVE Fst (vs 5.3% at 4<=n<=7 and 0% at
+# n>=8): those entries scatter around a noise floor rather than measuring differentiation.
+# Only 2015 has any subpop this small. Set False to fit every subpop.
+EXCLUDE_SMALL_SUBPOPS = True
+MIN_SUBPOP_N = 4
+
 
 # ---------------------------------------------------------------------------
 # Feature I/O + helpers (ABC_REFACTOR_PLAN.md 2c)
@@ -137,6 +145,43 @@ def _pi_log_mean_abs_diff(pi_sim, pi_obs):
     return float(np.nanmean(np.abs(np.log(pi_sim[mask]) - np.log(pi_obs[mask]))))
 
 
+_KEEP_MASK_CACHE = {}
+
+
+def get_keep_mask(year):
+    '''Boolean mask over specifier-matrix rows: True = subpop retained in the FITTED statistics.
+    Drops subpops with fewer than MIN_SUBPOP_N diploid individuals when EXCLUDE_SMALL_SUBPOPS is
+    set. Indexed by specifier row order, so the SAME mask is valid for the observed and the
+    simulated matrices (CLAUDE.md 4) -- that is what keeps the comparison element-wise.
+    Raises if a specifier site is missing from the popfile rather than silently keeping it.'''
+    year = str(year)
+    if year in _KEEP_MASK_CACHE:
+        return _KEEP_MASK_CACHE[year]
+
+    names = []
+    with open(Path(f"../data/Genetic_Data/specifier_matrix_{year}.csv"), encoding="utf-8") as f:
+        for line in f:
+            if line.strip():
+                names.append(line.split(",")[0].strip())
+
+    if not EXCLUDE_SMALL_SUBPOPS:
+        mask = np.ones(len(names), dtype=bool)
+    else:
+        counts = {}
+        with open(Path(f"../data/Genetic_Data/popFile{year}"), encoding="utf-8") as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) >= 2:
+                    counts[parts[1].strip()] = counts.get(parts[1].strip(), 0) + 1
+        missing = [s for s in names if s not in counts]
+        if missing:
+            raise ValueError(f"{year}: specifier sites absent from popFile{year}: {missing}")
+        mask = np.array([counts[s] >= MIN_SUBPOP_N for s in names], dtype=bool)
+
+    _KEEP_MASK_CACHE[year] = mask
+    return mask
+
+
 def model(parameter):
     '''
     The model function that runs the SLiM simulation with the given parameters: 
@@ -187,28 +232,45 @@ def calculate_losses(x, x0):
     Returns (all un-standardized):
       - pi_loss     : FITTED  (log-space, element-wise)
       - fst_loss    : FITTED  (off-diagonal)
-      - ibd_loss    : FITTED  (|IBD slope difference|)
+      - ibd_loss    : DIAGNOSTIC only (|IBD slope difference|)
       - dxy_loss    : DIAGNOSTIC only (off-diagonal)
       - genrel_loss : DIAGNOSTIC only (off-diagonal)
+
+    IBD was demoted from fitted to diagnostic: the OBSERVED slope is indistinguishable from zero
+    in all three years (Mantel test, 9999 permutations of site labels: p = 0.64 / 0.15 / 0.99;
+    Mantel r = -0.069 / +0.214 / +0.004, sign flipping across years). Fitting a target that is
+    noise adds a pure-noise term to the standardized D -- costing acceptance efficiency and
+    blurring the identifiable parameters -- and would give `scale` a posterior that is only its
+    prior reshaped. Still computed, as a posterior-predictive check.
     '''
     pi_terms, fst_terms, ibd_terms, dxy_terms, genrel_terms = [], [], [], [], []
 
     for year in ["2015", "2019", "2023"]:
+        keep = get_keep_mask(year)
+        kk = np.ix_(keep, keep)
+
         # pi (fitted, log-space, element-wise)
-        pi_terms.append(_pi_log_mean_abs_diff(x[f"{year}_diversity"], x0[f"{year}_diversity"]))
+        pi_terms.append(_pi_log_mean_abs_diff(x[f"{year}_diversity"][keep],
+                                              x0[f"{year}_diversity"][keep]))
 
         # Fst (fitted, off-diagonal)
-        fst_terms.append(_offdiag_mean_abs_diff(x[f"{year}_fst"], x0[f"{year}_fst"]))
+        fst_terms.append(_offdiag_mean_abs_diff(x[f"{year}_fst"][kk], x0[f"{year}_fst"][kk]))
 
-        # IBD slope (fitted) -- same real-site distances for observed and simulated
-        geo = get_site_geo_distances(year)
-        ibd_terms.append(abs(ibd_slope(x[f"{year}_fst"], geo) - ibd_slope(x0[f"{year}_fst"], geo)))
+        # IBD slope (diagnostic) -- same real-site distances for observed and simulated
+        geo = get_site_geo_distances(year)[kk]
+        ibd_terms.append(abs(ibd_slope(x[f"{year}_fst"][kk], geo)
+                             - ibd_slope(x0[f"{year}_fst"][kk], geo)))
 
         # dxy (diagnostic, off-diagonal)
-        dxy_terms.append(_offdiag_mean_abs_diff(x[f"{year}_divergence"], x0[f"{year}_divergence"]))
+        dxy_terms.append(_offdiag_mean_abs_diff(x[f"{year}_divergence"][kk],
+                                                x0[f"{year}_divergence"][kk]))
 
-        # genetic relatedness (diagnostic, off-diagonal)
-        genrel_terms.append(_offdiag_mean_abs_diff(x[f"{year}_relatedness"], x0[f"{year}_relatedness"]))
+        # genetic relatedness (diagnostic, off-diagonal) -- deliberately NOT masked. The matrix is
+        # centred on the populations present when it was computed, so slicing rows/cols out of it
+        # is NOT the same as recomputing on the subset (CLAUDE.md 8.2). Masking here would
+        # silently change what the numbers mean; both sides stay full-size instead.
+        genrel_terms.append(_offdiag_mean_abs_diff(x[f"{year}_relatedness"],
+                                                   x0[f"{year}_relatedness"]))
 
     return {
         "pi_loss": float(np.nanmean(pi_terms)),
@@ -337,7 +399,7 @@ def run_sims_from_csv(input_csv, output_csv="../out/abc_results.csv", simToRun=-
     
     # Define CSV columns
     # No per-year columns and no total_loss: the combined standardized distance is built offline
-    # (plan 4/6). pi/fst/ibd are FITTED; dxy/genrel are DIAGNOSTIC.
+    # (plan 4/6). pi/fst are FITTED; ibd/dxy/genrel are DIAGNOSTIC.
     fieldnames = ["iteration", "m", "total_migration", "pop", "numClusters", "mutation_rate", "recombination_rate",
                   "pi_loss", "fst_loss", "ibd_loss", "dxy_loss", "genrel_loss"]
     
@@ -441,7 +503,7 @@ def run_abc_simulation(num_iterations, output_csv="../out/abc_results.csv"):
 
     # Define CSV columns
     # No per-year columns and no total_loss: the combined standardized distance is built offline
-    # (plan 4/6). pi/fst/ibd are FITTED; dxy/genrel are DIAGNOSTIC.
+    # (plan 4/6). pi/fst are FITTED; ibd/dxy/genrel are DIAGNOSTIC.
     fieldnames = ["iteration", "m", "total_migration", "pop", "numClusters", "mutation_rate", "recombination_rate",
                   "pi_loss", "fst_loss", "ibd_loss", "dxy_loss", "genrel_loss"]
 
