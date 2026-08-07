@@ -1,4 +1,4 @@
-# TODO — updated 2026-07-29
+# TODO — updated 2026-08-04
 
 Remaining work. Project context is in **`CLAUDE.md`**; section references (§) point there.
 
@@ -75,15 +75,36 @@ identical to 4 s.f. across every entry — the `NORMALISE_BY` switch to callable
 
 ## 1. Blocking the big pass
 
-- [ ] **Resolve `ancestral_Ne = 6700`** (§6.1). The denominator fix removes ~10× of the ~2400× μ
-      inflation; a **~217× mismatch remains**. Needs the provenance question answered (§3 below).
-      Then reset it to a defensible long-term coalescent value.
-- [ ] **Rebuild the μ prior** around the biological rate (~2.1e-9). The current
-      `lognorm(s=0.5, scale=5e-6)` is calibrated to the broken π target and is meaningless after
-      the fix. `Main.main`'s default μ needs the same treatment.
-      **Empirically pinned 07-31:** at Ne=6700 the value that matches π is **μ ≈ 5.2e-7**
-      (measured at POPMULT=5000), against **4.6e-7** from §6.1's independent π arithmetic. Both
-      are ~250× biological — so this is not a prior-shape problem, it is §6.1.
+- [x] ~~**Find the provenance of `ancestral_Ne = 6700`**~~ — **done 08-04.** It is `N_a` from
+      **Cohen et al. 2022, Evol. Appl. 15:1691–1705, Figure 3a** (PDF in repo root), the dadi
+      ancestral size for the WI/NY split. The professor question is answered; see §6.1 for the
+      full write-up and for the four *other* project constants that trace to the same paper
+      (`2.75e-6`, the 324-generation run length, μ=2.1e-9, and the `pop` prior range).
+
+- [x] ~~**Run the `--anc-ne` / `--mu` ridge sweep**~~ — **done 08-04**, `diagnostics/ridge_sweep.py`,
+      results in `out/ridge_p150.jsonl`. Full table in §6.2.1. Three outcomes:
+      **(1) π is ridge-invariant** (−2.1 to −2.6% over a 3× Ne step) — Test 1 passes.
+      **(2) The between-subpop CV does NOT collapse** (flat to <1%; mean *and* sd both scale
+      ×2.9 with Ne_anc) — **my prediction was wrong. π keeps its information and stays fitted.**
+      **(3) Recapitation cost scales as Ne^2.34** at flat memory — the new blocker.
+
+- [x] ~~**Reset `ancestral_Ne` to ~1.4e6 and μ to 2.1e-9**~~ — **REVERSED 08-04. Keep 6700.**
+      Raising it would (a) barely change the inference, since π is ridge-invariant in both level
+      and relative spread, and (b) cost **~600 days per trial** at Ne=1.452e6. The Cohen critique
+      still stands as biology — 6700 fails its own paper's internal check by 52× — but it does not
+      license a code change, because the defensible value cannot be simulated. **Wall time, not
+      RAM, is the wall**, so CHTC does not rescue it either.
+
+- [ ] **Fix the *language* around μ instead** (§6.1). μ = 5e-6 is not a mutation rate; it is half
+      of a calibration constant whose only meaningful content is `4·Ne_anc·μ`. Concretely:
+      **(a)** drop `mutation_rate` from the ABC free parameters (`prior_distributions` /
+      `sample_prior` in `ABCAnalysisNoRedis.py`) — it is confounded with `ancestral_Ne` and carries
+      no independent signal; **(b)** rewrite the misleading comment at `ABCAnalysisNoRedis.py:13-14`;
+      **(c)** make `abc_standardize.py` report **θ = 4Nμ**, never μ alone.
+- [ ] **Re-calibrate μ at the POPMULT you actually intend to run.** `4·Ne·μ = 0.0122` does *not*
+      produce π = 0.0122 — forward-phase coalescence pulls it below, by a POPMULT-dependent factor
+      (81% of target at POPMULT=500, ~50% at POPMULT=150). μ and POPMULT are mildly coupled
+      through the π level; the sweep points were run at POPMULT=150 and are not the calibration.
 
 - [ ] **BLOCKING — π and F_st currently pull in opposite directions** (§6.2). At μ=5e-6 the
       POPMULT that fits F_st (≈5000) makes π **9.7× too high**; the POPMULT that would help π
@@ -104,6 +125,19 @@ identical to 4 s.f. across every entry — the `NORMALISE_BY` switch to callable
 
 ## 2. Pipeline / code
 
+- [ ] **`diagnostics/qdriver.py` is broken — fix or delete** (found 08-04). Three drifts from
+      production, any one of which invalidates its output: `simplificationRatio=INF` in its SLiM
+      template (§6.4 bug), `--slim-rho` default `1e-8` (§6.3 bug value), and a
+      `determine_migration_rates(distances, modifier=...)` call whose signature no longer exists,
+      which raises `TypeError` immediately. It has therefore not run since the migration refactor,
+      so nothing recent depends on it — but **`qpost.py` shares its output-file convention**, so
+      decide the two together. `ridge_sweep.py` was written to bypass both.
+- [x] ~~**`filter_populations=False` missing in the diagnostics harness**~~ — **fixed 08-04**,
+      `qdriver.py:154` and `qpost.py:52`. Same bug class as commit `c5963ae`: both simplified with
+      the default `filter_populations=True`, then queried `ts.samples(population=i, ...)` with
+      original cluster-row indices. Exposure was likely small at numClusters=33, but **re-measure
+      any sweep number that came from these scripts** rather than the full pipeline, and note this
+      was a prerequisite for the §6.1 `--anc-ne` sweep above.
 - [x] ~~**`recombination_rate` never reaches SLiM**~~ (§6.3) — **done 07-29**, both .slim files.
 - [x] ~~**Remove `simplificationRatio=INF`**~~ (§6.4) — **done 07-29**, both .slim files. Safety
       checked against the SLiM/pyslim docs, not assumed. **Not yet run.**
@@ -135,14 +169,29 @@ identical to 4 s.f. across every entry — the `NORMALISE_BY` switch to callable
 
 ## 3. Sohan — data, decisions, provenance
 
-- [ ] **Ask the professor about `ancestral_Ne = 6700`.** The single highest-value unknown:
+- [x] ~~**Ask the professor where `ancestral_Ne = 6700` came from.**~~ — **answered 08-04 from the
+      Cohen et al. 2022 PDF** (§6.1). No longer a provenance question.
 
-  > The 6700 figure we've been using for ancestral Ne — what was it estimated from, and is it a
-  > contemporary/local estimate or a long-term coalescent one? Recapitation needs the long-term
-  > coalescent Ne, and our corrected empirical π (~0.012 per site) implies something around 1.5
-  > million at the biological mutation rate. If 6700 is a contemporary estimate, I think we've
-  > been using it in the wrong role — and that's what's been forcing our mutation rate ~200×
-  > above the biological value.
+- [ ] **Still worth raising with the professor — but now it is a disagreement-with-a-published-
+      number question, not a "where did this come from" question.** Cohen et al. is very likely
+      his own lab's paper, so lead with the internal check, not with our π:
+
+  > I traced our ancestral Ne = 6700 to Figure 3a of the 2022 Evolutionary Applications paper —
+  > the dadi N_a for the WI/NY split. The trouble is it doesn't reconcile with our data by ~200×,
+  > and I think the problem is upstream of us: if I take Watterson's θ from the SNP counts
+  > reported in that paper itself — 11.8M polymorphic sites over ~870 Mb at n=28 — I get
+  > Ne ≈ 3.5e5 at the same midge mutation rate, which is 52× the 6700 the dadi model reports.
+  > Our corrected π puts us at ~1.45e6, only 4× from that. The paper does flag that low coverage
+  > would bias the SFS downward, and that dadi and Stairway plot disagreed 4×. My guess is that
+  > N_a = θ/(4μL) used L = 840 Mb (all intergenic sequence) while the SFS itself was built from a
+  > much more stringently filtered subset — which would deflate N_a by exactly that ratio. Does
+  > that sound right, and is the filtered site count recoverable? It decides whether we keep 6700
+  > or recalibrate to ~1.4e6.
+
+- [ ] **Ask whether `N_WI = 15,000` should anchor the `pop` prior more tightly** (§6.1). The
+      current `U(2000, 12000)` gives total N ≈ 6.7k–40k, which brackets both Cohen estimates —
+      but that bracketing looks incidental rather than deliberate, and the same low-coverage bias
+      that hits `N_a` hits `N_WI` too.
 
 - [ ] **Ask about the collection protocol for `Mortensen9-2015` and `H41-2023`** — the second
       highest-value question after Ne (§7.2):

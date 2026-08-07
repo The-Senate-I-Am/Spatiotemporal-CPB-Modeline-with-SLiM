@@ -6,3 +6,8 @@ __pycache__/
 *.trees
 *.pdf
 /.vscode
+out/simTreeSeq.trees
+
+# Private working notes
+CLAUDE.md
+TODO.md

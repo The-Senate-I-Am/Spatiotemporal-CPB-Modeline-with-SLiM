@@ -72,6 +72,14 @@ demes), where many demes go unreferenced. Fixed with `filter_populations=False`
 when filtering occurred but the index stayed in range, the old code silently returned the *wrong
 deme's* statistics. Treat any pre-`c5963ae` results as suspect. [VERIFIED]
 
+> **The same bug survived in the diagnostics harness until 2026-08-04** — `qdriver.py:154` and
+> `qpost.py:52` both simplified with the default `filter_populations=True` and then queried
+> `ts.samples(population=i, ...)` with original cluster-row indices. Both now pass
+> `filter_populations=False`. Exposure was probably small at numClusters=33 (most demes are
+> referenced), but **any §6.2-style sweep number that came from these two scripts rather than the
+> full pipeline should be re-measured**, and this is a prerequisite for using them on the §6.1
+> `--anc-ne` sweep. Grep for `.simplify(` before trusting any new script.
+
 ---
 
 ## 3. Environment [VERIFIED]
@@ -279,27 +287,60 @@ check only.
 
 Ordered by how much they distort the inference.
 
-### 6.1 `ancestral_Ne = 6700` is probably the wrong quantity [INFERRED — the biggest open question]
+### 6.1 `ancestral_Ne = 6700` — provenance found; the value fails its own source's internal check
 
-`pyslim.recapitate(ts, ..., ancestral_Ne=6700)`. The forward SLiM phase runs only 324 generations
-while coalescence takes thousands, so most lineages coalesce in the *recapitated* ancestral phase
-at this fixed Ne.
+**Source [VERIFIED 2026-08-04]: Cohen et al. 2022, *Evolutionary Applications* 15:1691–1705
+(doi:10.1111/eva.13498), Figure 3a.** PDF is in the repo root. 6700 is `N_a`, the **dadi**-inferred
+ancestral effective size of the common ancestor of the Hancock, WI and Long Island, NY pest
+populations, at a split **325 generations (160 yr ± 1.6)** ago. The same figure gives
+`N_WI = 15,000 (±163)` and `N_NY = 40,000 (±760)`.
 
-Recapitation's `ancestral_Ne` is the **long-term coalescent** effective size — the harmonic-mean Ne
-over the thousands of generations in which lineages actually coalesce. 6700 looks much more like a
-**contemporary or local** Ne, the kind produced by LD-based or temporal estimators. Those routinely
-differ by orders of magnitude.
+**This one paper is the provenance of nearly every fixed constant in the project:**
 
-Working from the corrected π at the biological rate (μ ≈ 2.1e-9):
+| project constant | source in Cohen et al. |
+|---|---|
+| `ancestral_Ne = 6700` | Fig. 3a `N_a = 6,700 (±10)` |
+| `DEFAULT_RECOMBINATION_RATE = 2.75e-6` | §3.2 `r_HAN = 2.75e-6` — the **Wisconsin** population, i.e. the right one for us |
+| SLiM run length 324 generations (`CPBSampleSim*.slim:43,48,53`) | the 325-generation divergence |
+| "biological μ ≈ 2.1e-9" | the *Chironomus riparius* midge rate Cohen used; there is no CPB-specific rate |
+| `pop` prior `U(2000, 12000)` → total N 6.7k–40k | brackets `N_WI = 15,000` and `N_NY = 40,000` |
+
+**The old guess in this section was half wrong.** 6700 is *not* a contemporary or LD-based
+estimate. In dadi's `no_mig` model the ancestral population is **constant-size extending
+infinitely into the past**, which is conceptually exactly what `recapitate(ancestral_Ne=)` wants.
+**The role is right.** The value is not.
+
+**The ~217× conflict is internal to Cohen et al., not a disagreement between their data and ours.
+[VERIFIED — arithmetic]** Watterson's θ from *their own reported* 11.8M polymorphic sites over an
+~870 Mb genome at n=28 diploids (a_56 = 4.594):
 
 ```
-Ne = π/(4μ) = 0.0122 / (4 x 2.1e-9) ~ 1.46e6
+theta_W = 11.8e6 / (870e6 * 4.594)   = 2.95e-3 per site
+Ne      = theta_W / (4 * 2.1e-9)     ~ 3.5e5      <- from Cohen's own SNP count
 ```
 
-against 6700 — a **~217× mismatch that the denominator fix does not remove.** For a widespread
-agricultural pest, a long-term Ne near 10⁶ is unremarkable (Drosophila sits in that range).
+That is **52× their own reported `N_a` = 6700**, using their own mutation rate. Our π-derived
+`Ne = 0.0122/(4·2.1e-9) ≈ 1.45e6` is only **4×** from *that* — same order of magnitude.
+**Our π is not the outlier; 6700 is.**
 
-How μ absorbed both errors at once:
+**The paper says so itself, twice.** §4.1: sequencing was low-coverage (>5× average, ≥3× per
+individual), so "possible heterozygous sites [are] mistaken as homozygous… reducing singletons and
+causing a bias that results in **underestimating demography**… our results might lead to an
+**underestimate in effective population size**." And their two methods disagree with each other —
+"the dadi estimates… were ~4-fold larger than estimates from the Stairway plot," whose Figure 1
+sits at 1k–20k. The authors treat this as a modest caveat; the arithmetic above says it is ~50×.
+
+**Leading mechanistic candidate — and it is the mirror image of the §5.1 bug we just fixed on our
+own side. [INFERRED]** `N_a` is derived, not measured: `N_a = θ_dadi / (4μL)` with
+**L = 840 Mb, "all intergenic sequence data."** But the 2D-SFS was built from intergenic regions
+"with **stringent quality thresholds for coverage and likelihood**." If θ was fit to an SFS drawn
+from a heavily filtered subset while L was set to the full intergenic span, `N_a` is deflated by
+exactly that fraction — the same denominator/numerator mismatch as §5.1, pointing the other way.
+Reconciling with our π would need L ≈ 3.9 Mb, which is too small to be the whole story on its own,
+so this is likely **compounded with** the low-coverage singleton loss the authors name. Confirming
+it would need their supplement. Either way both named biases push the same direction: *up*.
+
+How μ has been absorbing the error:
 
 | scenario | π target | required μ at Ne=6700 | × biological |
 |---|---|---|---|
@@ -312,7 +353,28 @@ How μ absorbed both errors at once:
 sensitivity analysis only. Scaling it with `population_modifier` was considered and **rejected**
 (fabricates N-identifiability, conflates two demographic epochs).
 
-**[OPEN] — needs the provenance of 6700.** It predates this project. See `TODO.md`.
+**Resolution [VERIFIED 2026-08-04 by the ridge sweep, §6.2.1 — this REVERSES the earlier
+recommendation to set `ancestral_Ne ≈ 1.4e6`]:**
+
+**Keep `ancestral_Ne = 6700`. Do not raise it.** Two measured facts force this:
+
+1. **It would not change the inference.** π is invariant along the `4·Ne·μ = const` ridge in
+   *both* its level (±2.6%) and its between-subpop relative spread (CV flat to <1%). So moving
+   along the ridge is very nearly a no-op for the ABC.
+2. **It is computationally impossible.** Recapitation cost scales as **Ne^2.34** (measured).
+   Ne = 1.452e6 extrapolates to **~600 days per trial.**
+
+**What must change is the language, not the constant.** μ = 5e-6 is **not a mutation rate** — it
+is half of a calibration constant whose only meaningful content is the product `4·Ne_anc·μ`, set
+to match observed π. Never report μ on its own, never present it as biological, and do not infer
+it: report **θ = 4Nμ** (§6.2 already said this). The critique of Cohen's 6700 above stands as a
+statement about CPB biology; it just does not license a code change, because the biologically
+"correct" value cannot be simulated.
+
+> **Calibration is POPMULT-dependent.** Setting `4·Ne·μ = 0.0122` does *not* yield π = 0.0122 —
+> forward-phase coalescence pulls `branch_div` below `4·Ne_anc`, so the realised π is lower, and
+> by a POPMULT-dependent factor (81% of target at POPMULT=500, ~50% at POPMULT=150). μ and POPMULT
+> are therefore mildly coupled through the π level. Calibrate μ at the POPMULT you intend to run.
 
 ### 6.2 Is N identifiable? — must be re-derived [OPEN]
 
@@ -350,6 +412,63 @@ tradeoff that is an artifact of a miscalibrated μ, not a feature of the data.
 This also **pins the μ recalibration empirically**: matching π at POPMULT=5000 and Ne=6700 needs
 μ ≈ **5.2e-7**, against the **4.6e-7** predicted independently by §6.1's π arithmetic — two routes
 agreeing to ~15%. Both are ~250× the biological rate, which is the §6.1 problem restated.
+
+### 6.2.1 The ridge sweep — π survives, but Ne_anc cannot be raised [VERIFIED 2026-08-04]
+
+`diagnostics/ridge_sweep.py`, POPMULT=150, numClusters=33, seed 1, two points on
+`4·Ne·μ = 0.0122`: **(Ne=6700, μ=4.55e-7)** and **(Ne=20000, μ=1.53e-7)**, a 2.985× step.
+
+| quantity | Ne=6700 | Ne=20000 | ratio |
+|---|---|---|---|
+| `recap_s` | 183.8 | 2369.7 | **×12.89 → exponent 2.34** |
+| `recap_peak_mb` | 292 | 291 | ×1.00 |
+| site π (2015/19/23) | .00582/.00616/.00631 | .00570/.00600/.00615 | **−2.1/−2.6/−2.5%** |
+| `branch_div` mean | 12918/13649/13992 | 37665/39635/40616 | ×2.92/2.90/2.90 |
+| `branch_div` **sd** | 4010/4286/3816 | 11687/12508/11170 | ×2.92/2.92/2.93 |
+| `branch_div` **CV** | .3104/.3140/.2727 | .3103/.3156/.2750 | **×1.000/1.005/1.008** |
+| mean F_st | .2503/.2277/.2045 | .2518/.2291/.2063 | +0.6/+0.6/+0.9% |
+
+**Test 1 — π is invariant along the ridge. PASSES.** π moves only −2.1 to −2.6% for a 3× change in
+Ne_anc. The small residual drift is the forward-phase contribution shrinking in relative terms,
+exactly as theory says it should.
+
+**Test 2 — the between-subpop spread does NOT collapse. The prediction above was WRONG.** Mean and
+SD of `branch_div` both scale ×2.9 with Ne_anc, so the **CV is flat to under 1%.** The mechanism:
+the ancestral contribution to a subpop's coalescence time is weighted by the probability its pairs
+did *not* already coalesce in the forward phase, and that probability varies by subpop. So the
+ancestral phase **multiplies** the forward structure rather than **adding** a constant to it, and
+relative structure is preserved no matter how deep the ancestral phase gets.
+
+Consequences, all favourable:
+- **π stays a fitted statistic.** It keeps its full relative information about POPMULT and
+  migration. Do not demote it.
+- **Log space is exactly right** (§7): `pi_loss` measures relative differences, which is precisely
+  the quantity shown to be ridge-invariant.
+- **The circularity worry is defused.** The element-wise variation is genuine independent signal
+  and it does not shrink, so calibrating the *level* does not hollow out the statistic.
+- **F_st is confirmed insensitive to `ancestral_Ne`** (<1%), as a forward-phase ratio should be.
+
+**Test 3 — cost. This is the new blocker.** `recap_s` scales as **Ne^2.34** while memory stays
+flat at ~291 MB. So the constraint is **wall time, not RAM** — the opposite of the §3.1 OOM
+problem. Extrapolated from the Ne=6700 baseline at POPMULT=150:
+
+| target Ne_anc | factor | projected recapitation |
+|---|---|---|
+| 2e5 | ×2,805 | ~143 h (6 days) |
+| 1.452e6 (π-implied) | ×288,691 | **~14,700 h (614 days)** |
+
+**Raising `ancestral_Ne` to the biologically-implied value is computationally out of reach**, by
+about four orders of magnitude, and no amount of CHTC memory fixes a wall-time wall. Since §6.2.1
+also shows raising it would barely move the inference, the correct move is to **keep 6700** — see
+§6.1's resolution.
+
+**Caveats, stated honestly.** Measured across 3× in Ne (6700→20000), not the full 217×; the
+mechanism (mean and sd both ∝ Ne_anc) is clear and the extrapolation is principled, but the top of
+the ridge is unverified. POPMULT=150 is far below the prior range, chosen because cost is
+dominated by Ne_anc — dropping POPMULT 3.3× (500→150) cut recapitation only 19%, so POPMULT is
+**not** a useful cost lever. The absolute CV is strongly POPMULT-dependent (0.27–0.31 at
+POPMULT=150 vs 0.081–0.093 at POPMULT=500); what was shown invariant is its *insensitivity to
+Ne_anc*, not its value.
 
 ### 6.3 `recombination_rate` now reaches the forward simulation [FIXED 2026-07-29]
 
@@ -618,7 +737,8 @@ Real-data IBD slopes finite: 2015 −1.42e-3, 2019 +8.04e-4, 2023 +1.44e-4 (weak
 | `Python_Code/GenerateSimulationParams.py` | `determine_migration_rates(distances, total_migration, scale, ...)`. |
 | `Python_Code/GenerateClusterData.py` | KMeans clustering, distance matrix, genome→cluster assignment (`assign_genomes_to_clusters_idv_year` sets subpop→specifier-row mapping). |
 | `SLiM_Code/CPBSampleSim{Linux,Win}.slim` | Forward sim. Neutral, `mutationRate(0)`. Takes `-d POPMULT` and `-d RECOMB` (§6.3), default simplification (§6.4). The two files are identical apart from path separators — **fix both or neither.** |
-| `diagnostics/qdriver.py` | Controlled sweep/rescaling harness: fixed KMeans seed, templated SLiM, scalable migration, reports branch-mode diversity. |
+| `diagnostics/qdriver.py` | **BROKEN — do not use** (found 2026-08-04). Drifted from production three ways: `simplificationRatio=INF` in its SLiM template (the §6.4 bug), `--slim-rho` default `1e-8` (the §6.3 bug value), and a `determine_migration_rates(distances, modifier=...)` call whose signature no longer exists → `TypeError` on every run. Fix or delete before trusting anything it produced. |
+| `diagnostics/ridge_sweep.py` | §6.2.1 harness. `--setup` builds a `.trees` via the production path; each subsequent call runs one `4·Ne·μ = const` ridge point and appends JSON to `out/ridge_*.jsonl` (one point per process, so a failure costs only that point). Reports branch-mode diversity mean/sd/**CV**, site π, F_st, plus wall time and peak RSS. |
 | `diagnostics/qpost.py` | Post-process an existing `.trees` → branch diversity, site π, F_st. Fast; no SLiM needed. |
 | `ToUseOnBeagles/*` | Empirical-side pipeline (§5). Runs on the Beagle machine, not here. |
 

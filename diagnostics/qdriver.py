@@ -151,7 +151,9 @@ def main():
     for y in ["2015", "2019", "2023"]:
         for idx in gi[y]:
             keep.extend(ts.samples(population=idx, time=times[y]))
-    ts = ts.simplify(samples=keep)
+    # filter_populations=False is REQUIRED — the ts.samples(population=i) queries below use the
+    # original cluster-row index. Same bug class as AnalyzeTreeSeq.py:146 / commit c5963ae.
+    ts = ts.simplify(samples=keep, filter_populations=False)
 
     ts_mut = msprime.sim_mutations(
         ts, rate=args.mu,
