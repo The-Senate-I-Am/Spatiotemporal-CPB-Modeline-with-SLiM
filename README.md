@@ -150,6 +150,12 @@ changed the project:
 - **Population size is identifiable through F_st, not through π.** A POPMULT sweep tracks
   `1/(1+4Nm)` almost exactly and improves the F_st distance 8.7×, even though π depends on N and μ
   only through the confounded product θ = 4Nμ.
+- **The diversity scale was ~10.8× off, and it was manufacturing a false conflict.** Recalibrating
+  μ against the corrected π target (5e-6 → 4.646e-7, measured at three population sizes) dissolved
+  a standing blocker: population size and differentiation had appeared to demand incompatible
+  values, but with the scale fixed both fitted statistics improve together. Because coalescence in
+  the ancestral phase puts a hard ceiling on achievable diversity, the calibration saturates — one
+  fixed value covers the entire prior to within ±3%.
 - **A ridge sweep over `4·N_e·μ = const`** showed π is invariant along the ridge in both its level
   (±2.6%) and its between-subpop coefficient of variation (<1%), while recapitation cost scales as
   `N_e^2.34`. That combination settled a live question about the ancestral effective size: the
@@ -159,10 +165,15 @@ changed the project:
 
 ## Status
 
-Pre-inference. The pipeline runs end to end and the empirical targets are validated, but the full
-ABC pass is deliberately not running yet: at the current diversity calibration, the population size
-that fits F_st drives π further from target, so a pass now would optimize an artifact rather than a
-feature of the data. Recalibrating μ at the intended POPMULT is the blocking item.
+Pre-inference, but no longer blocked on calibration. The pipeline runs end to end, the empirical
+targets are validated, and the diversity scale has been recalibrated (μ: 5e-6 → 4.646e-7, measured
+at three population sizes). That removed the standing blocker: the population size that fits F_st
+no longer drives π away from target — both fitted statistics now improve together, so the earlier
+conflict was an artifact of the miscalibrated scale rather than a feature of the data.
+
+Remaining before the full pass: confirm that simulated and observed π covary site-by-site (if they
+do not, π's preference for large population sizes is partly spurious), measure the noise floor
+across replicates, and size the cluster jobs for the top of the prior.
 
 Design decisions, verified measurements, known defects, and remaining work are tracked in a
 separate working log that is not part of this repository.

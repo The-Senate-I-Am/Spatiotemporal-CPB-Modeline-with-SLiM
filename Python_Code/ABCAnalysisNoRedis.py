@@ -10,10 +10,29 @@ from scipy import stats
 import Main
 
 # Operating parameter values.
-# mutation_rate here is a NUISANCE DIVERSITY-SCALER (~5e-6), NOT the biological rate (~2.1e-9):
-# with ancestral_Ne fixed at 6700, pi = 4*Ne*mu, so matching empirical pi (~0.14) needs mu ~5e-6.
-# mu is not interpreted biologically (CLAUDE.md 5.1).
-DEFAULT_MUTATION_RATE = 5e-6
+# mutation_rate is NOT a biological mutation rate (~2.1e-9) and must never be reported as one.
+# It is half of a CALIBRATION CONSTANT: with ancestral_Ne pinned at 6700, the only quantity with
+# meaning is theta = 4*Ne_anc*mu, chosen so simulated pi reproduces observed pi = 0.0122
+# (CLAUDE.md 6.1). Report theta, never mu alone.
+#
+# CALIBRATED 2026-08-11 at POPMULT=5000, numClusters=33, total_migration=0.05, ancestral_Ne=6700
+# (diagnostics/mu_calibrate.py; raw records in out/mu_calibration.jsonl):
+#   branch-mode diversity = 26847 generations  ->  mu = 4.646e-7,  4*Ne*mu = 0.01245.
+#
+# Two things this supersedes:
+#  - The old 5e-6 was calibrated against the pre-2026-07-28 per-SNP pi target, which was ~11.5x
+#    too high (5.1). It is ~10.8x too large and was the sole cause of the "pi and Fst pull in
+#    opposite directions" blocker (6.2) -- with mu calibrated, both fitted losses improve
+#    together with POPMULT.
+#  - 4*Ne*mu is deliberately NOT 0.0122. Forward-phase coalescence holds branch_div below
+#    4*Ne_anc, so mu must sit ~2% above pi/(4*Ne) to land on the observed level. That gap is
+#    POPMULT-dependent, which is why this is calibrated at a stated POPMULT rather than derived.
+#
+# Holding mu fixed at this value across the prior U(2000, 12000) drifts simulated pi by only
+# -3.2% (at POPMULT=2000) to +2.1% (at 12000), because branch_div saturates against its ceiling
+# 2*(324 + 2*Ne_anc) = 27448. That residual drift is signal, not error: it is how the pi LEVEL
+# carries information about POPMULT once mu is no longer free.
+DEFAULT_MUTATION_RATE = 4.646e-7
 # recombination_rate is FIXED (not inferred): no signal in pi/dxy/Fst, only in LD (CLAUDE.md 5.4).
 DEFAULT_RECOMBINATION_RATE = 2.75e-6
 
@@ -27,7 +46,18 @@ prior_distributions = {
     "total_migration": stats.uniform(loc=0.001, scale=0.3),   # total immigration fraction, U(0.001, 0.301)
     "pop": stats.uniform(loc=2000, scale=POPMULT_MAX - 2000),  # POPMULT in [2000, 12000] ~ [6.7k, 40k] individuals
     "numClusters": stats.randint(1, 4),  # randint(1, 4) gives 1, 2, or 3
-    "mutation_rate": stats.lognorm(s=0.5, scale=DEFAULT_MUTATION_RATE),  # nuisance diversity-scaler ~5e-6 (see note above)
+    # mu stays a free NUISANCE parameter, but with a tight prior. lognorm(s=...) is multiplicative
+    # about its median, so s IS the fractional spread: the old s=0.5 gave a single draw a ~+-65%
+    # swing in pi. That swamped both the observed between-site spread (1.4-2.1% in log units, once
+    # the 7.2 isolate sites that dominate it are excluded) and the -3.2%/+2.1% pi drift that
+    # carries POPMULT information -- pi_loss would have ranked draws mostly on the mu draw.
+    # s=0.05 is sized to the calibration's OWN uncertainty: ~1% Monte-Carlo (the mu iterates in
+    # out/mu_calibration.jsonl spread 0.44-0.99%) plus the ~3% POPMULT coupling across the prior.
+    # DELIBERATELY NOT covered here: the callable-sites denominator is provisional and biases the
+    # pi target by order 10-20% (5.1). That is a SYSTEMATIC offset shared by every site and every
+    # year, not a per-trial random quantity, so it belongs in a sensitivity re-calibration --
+    # widening this prior to absorb it would only inject noise into the distance.
+    "mutation_rate": stats.lognorm(s=0.05, scale=DEFAULT_MUTATION_RATE),  # report theta=4*Ne*mu, never mu
 }
 
 # --- Fitted-statistic configuration (CLAUDE.md 7) --------------------------------------------

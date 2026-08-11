@@ -95,22 +95,41 @@ identical to 4 s.f. across every entry — the `NORMALISE_BY` switch to callable
       license a code change, because the defensible value cannot be simulated. **Wall time, not
       RAM, is the wall**, so CHTC does not rescue it either.
 
-- [ ] **Fix the *language* around μ instead** (§6.1). μ = 5e-6 is not a mutation rate; it is half
-      of a calibration constant whose only meaningful content is `4·Ne_anc·μ`. Concretely:
-      **(a)** drop `mutation_rate` from the ABC free parameters (`prior_distributions` /
-      `sample_prior` in `ABCAnalysisNoRedis.py`) — it is confounded with `ancestral_Ne` and carries
-      no independent signal; **(b)** rewrite the misleading comment at `ABCAnalysisNoRedis.py:13-14`;
-      **(c)** make `abc_standardize.py` report **θ = 4Nμ**, never μ alone.
-- [ ] **Re-calibrate μ at the POPMULT you actually intend to run.** `4·Ne·μ = 0.0122` does *not*
-      produce π = 0.0122 — forward-phase coalescence pulls it below, by a POPMULT-dependent factor
-      (81% of target at POPMULT=500, ~50% at POPMULT=150). μ and POPMULT are mildly coupled
-      through the π level; the sweep points were run at POPMULT=150 and are not the calibration.
+- [~] **Fix the *language* around μ** (§6.1). μ is not a mutation rate; it is half of a
+      calibration constant whose only meaningful content is `4·Ne_anc·μ`.
+      **(a) DECIDED 08-11 — μ stays a free nuisance parameter, but with `s` tightened 0.5 → 0.05.**
+      (The originally-planned "drop it entirely" was considered and not taken.) At `s=0.5` a single
+      draw swung π by ±65%, swamping both the observed between-site spread (0.014–0.021) and the
+      ±3% POPMULT drift, so `pi_loss` would have ranked draws mostly on the μ draw. `s=0.05` is
+      sized to the calibration's own uncertainty (~1% Monte-Carlo + ~3% POPMULT coupling).
+      **Residual, stated honestly:** at `s=0.05` the μ prior still has log-sd 0.0495, ~1.6× the
+      POPMULT-driven π drift — so π remains more sensitive to μ than to POPMULT. Survivable
+      (μ marginalises out in rejection ABC; the cost is acceptance efficiency, not bias), but
+      **consider `s=0.02` if π should discriminate POPMULT directly.**
+      **(b) done 08-11** — `ABCAnalysisNoRedis.py:12-16` rewritten with the calibration provenance.
+      **(c) still open** — make `abc_standardize.py` report **θ = 4Nμ**, never μ alone.
 
-- [ ] **BLOCKING — π and F_st currently pull in opposite directions** (§6.2). At μ=5e-6 the
-      POPMULT that fits F_st (≈5000) makes π **9.7× too high**; the POPMULT that would help π
-      wrecks F_st. **No parameter set satisfies both**, so a pass run now would optimize an
-      artifact of the miscalibrated μ rather than anything in the data. This is the single
-      clearest reason not to spend CHTC compute until §6.1 is settled.
+- [ ] **Check whether simulated and observed π covary site-by-site** (§7.2, implication 3). Not
+      established. If they do not, `pi_loss` partly rewards a *flat* simulation for sitting closer
+      in L1 to a scattered target than a differently-scattered simulation would — which would make
+      π's apparent preference for large POPMULT partly spurious. Needs the per-subpop π vectors,
+      which `mu_calibrate.py` summarises rather than stores (a small change to it). **Do this
+      before trusting a POPMULT posterior driven by π.**
+- [x] ~~**Re-calibrate μ at the POPMULT you actually intend to run.**~~ — **done 08-11**,
+      `diagnostics/mu_calibrate.py`, results in `out/mu_calibration.jsonl`, write-up in §6.1.1.
+      **`DEFAULT_MUTATION_RATE = 4.646e-7`** (was 5e-6, i.e. **10.8× too large**), calibrated at
+      POPMULT=5000 / numClusters=33 / total_migration=0.05. Measured at three POPMULTs
+      (500 / 2000 / 5000 → μ = 5.564e-7 / 4.819e-7 / 4.646e-7). `branch_div` saturates against a
+      hard ceiling `2·(324 + 2·Ne_anc) = 27448`, so **one fixed μ covers the whole prior**: held
+      at 4.646e-7, π drifts only −3.2% (POPMULT=2000) to +2.1% (12000). Three independent
+      cross-checks against §6.2 and `ridge_sweep.jsonl` passed, one of them exact.
+
+- [x] ~~**BLOCKING — π and F_st currently pull in opposite directions**~~ (§6.2) — **RESOLVED
+      08-11 by the recalibration.** The conflict existed only at μ=5e-6. With μ calibrated, both
+      fitted losses improve *together* with POPMULT: π 0.067→0.029→0.021 and F_st
+      0.071→0.019→0.0083 over POPMULT 500→2000→5000. **This unblocks the pass** as far as §1 is
+      concerned. F_st still wants slightly more than POPMULT=5000 (sim 0.0079 vs observed
+      0.00645, implying POPMULT ≈ 6000), which is comfortably inside the prior.
 - [~] **Re-derive whether N is identifiable** (§6.2) — **partially answered 07-31: yes, via F_st.**
       A 500→5000 POPMULT sweep moved simulated F_st from 0.076 onto the observed 0.008, improving
       `fst_loss` **8.7×**, tracking `1/(1+4Nm)`. The old "N is nearly unidentifiable" claim came

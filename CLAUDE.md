@@ -375,6 +375,53 @@ statement about CPB biology; it just does not license a code change, because the
 > forward-phase coalescence pulls `branch_div` below `4·Ne_anc`, so the realised π is lower, and
 > by a POPMULT-dependent factor (81% of target at POPMULT=500, ~50% at POPMULT=150). μ and POPMULT
 > are therefore mildly coupled through the π level. Calibrate μ at the POPMULT you intend to run.
+> **Done — see §6.1.1.**
+
+### 6.1.1 μ recalibrated: 5e-6 → 4.646e-7 [VERIFIED 2026-08-11]
+
+`diagnostics/mu_calibrate.py`, `numClusters=33`, `total_migration=0.05`, `ancestral_Ne=6700`,
+seed 1. Raw records in `out/mu_calibration.jsonl`; `mu_calibrate_summary.py` tabulates them.
+
+**Method.** Recapitate + simplify **once** (~97% of cost, and entirely μ-free), then sweep μ over
+cheap mutation overlays on the ~2.4k-sample simplified tree. Branch-mode diversity `b_i` gives an
+analytic first μ with no re-running; the loop then corrects the multiple-hit deficit. The
+objective is the *actual* fitted loss, not mean-matching: since `log π_sim,i = log μ + log b_i`,
+minimising `pi_loss` over `log μ` is a weighted-L1 problem whose exact minimiser is the **weighted
+median** of `log π_obs,i − log b_i` with weights `1/(3·n_year)` — the same year-normalisation
+`calculate_losses` uses, with the §7.0 mask applied to both sides.
+
+| POPMULT | subpop N | `branch_div` | /ceiling | **μ_calib** | 4Ne·μ | `pi_loss` | `fst_loss` | sim F_st |
+|---|---|---|---|---|---|---|---|---|
+| 500 | 50 | 21647 | 0.789 | 5.564e-7 | 0.01491 | 0.0672 | 0.07145 | 0.0766 |
+| 2000 | 202 | 25629 | 0.934 | 4.819e-7 | 0.01291 | 0.0290 | 0.01856 | 0.0197 |
+| **5000** | 505 | 26847 | 0.978 | **4.646e-7** | 0.01245 | 0.0213 | **0.00830** | 0.0079 |
+
+(observed F_st = 0.00645 in every row.) **`DEFAULT_MUTATION_RATE` is now the POPMULT=5000 value,
+4.646e-7 — the old 5e-6 was 10.8× too large**, being calibrated against the pre-2026-07-28
+per-SNP π target (§5.1).
+
+**Three independent cross-checks passed**, which is what licenses trusting the harness: implied
+`branch_div` at POPMULT=500 reproduces `ridge_sweep.jsonl`'s 21985; `fst_loss` at POPMULT=500
+reproduces §6.2's 0.0719; and `fst_loss` at POPMULT=5000 reproduces §6.2's 0.00829 **exactly**.
+
+**`site_pi = μ · branch_div` is not exact — it runs 1–2% low**, and the deficit grows with `μ·b`
+(multiple hits at a site). Purely analytic calibration lands ~1.8% low, so the iteration matters.
+Monte-Carlo precision of the result is **0.44–0.99%** (each iterate re-draws mutations, so the
+loop oscillates rather than converging to a fixed point; `mu_calibrated` is the last iterate).
+
+**`branch_div` saturates, which is why ONE fixed μ covers the whole prior.** Recapitation
+coalesces any surviving pair at rate `1/(2·Ne_anc)`, so
+`branch_div ≤ 2·(324 + 2·6700) = 27448` — a hard ceiling, giving μ a floor of ~4.45e-7. Fitting
+the deficit `1 − b/ceiling ≈ 94.2·POPMULT^−0.973` (a **fit, not a derivation** — an `exp(−P/τ)`
+form was tried and rejected for being unable to fit both ends) extrapolates to μ = 4.51e-7 at
+POPMULT=8000 and 4.49e-7 at 12000. Holding μ at 4.646e-7 across the prior `U(2000, 12000)`
+therefore drifts π by only **−3.2% to +2.1%** — and that drift is *signal*: it is how the π level
+carries POPMULT information now that μ is effectively pinned.
+
+**Consequence for §6.2 — the blocker is gone.** With μ calibrated per POPMULT, π and F_st no
+longer pull in opposite directions; both improve monotonically together (π 0.067→0.029→0.021,
+F_st 0.071→0.019→0.0083). The conflict was an artifact of the miscalibrated μ, not a feature of
+the data.
 
 ### 6.2 Is N identifiable? — must be re-derived [OPEN]
 
@@ -404,14 +451,18 @@ A two-point POPMULT sweep at μ=5e-6, `total_migration=0.05`, numClusters=33:
 F_st tracks `1/(1+4Nm)` almost exactly and `fst_loss` improves **8.7×**. So the structural side
 carries real information about N. Do not conclude "N is unidentifiable" from the π argument alone.
 
-**But the two fitted statistics currently pull in opposite directions.** The POPMULT that fits
-F_st drives π *further* from target (9.7× too high at POPMULT=5000, up from 7.8× at 500), because
-μ is fixed far too high. **No POPMULT satisfies both.** Running the pass in this state optimizes a
-tradeoff that is an artifact of a miscalibrated μ, not a feature of the data.
+**~~But the two fitted statistics currently pull in opposite directions.~~ RESOLVED 2026-08-11 by
+§6.1.1.** The old reading was: the POPMULT that fits F_st drives π *further* from target (9.7× too
+high at POPMULT=5000), so **no POPMULT satisfies both**. That was true only at the miscalibrated
+μ = 5e-6. With μ recalibrated to 4.646e-7, π and F_st improve **together** with POPMULT
+(π 0.067→0.029→0.021, F_st 0.071→0.019→0.0083 over POPMULT 500→2000→5000). The tradeoff was an
+artifact of μ, not a feature of the data, exactly as this section suspected.
 
-This also **pins the μ recalibration empirically**: matching π at POPMULT=5000 and Ne=6700 needs
-μ ≈ **5.2e-7**, against the **4.6e-7** predicted independently by §6.1's π arithmetic — two routes
-agreeing to ~15%. Both are ~250× the biological rate, which is the §6.1 problem restated.
+This section also **predicted the recalibration, and the arithmetic route won**: matching π at
+POPMULT=5000 and Ne=6700 was estimated at μ ≈ **5.2e-7** by sweep extrapolation, against
+**4.6e-7** from §6.1's π arithmetic. The measured value is **4.646e-7** — the arithmetic route was
+right to within 1%, the extrapolation 12% high. Both remain ~220× the biological rate, which is
+the §6.1 problem restated and is *not* resolved by this (nor can it be — §6.2.1).
 
 ### 6.2.1 The ridge sweep — π survives, but Ne_anc cannot be raised [VERIFIED 2026-08-04]
 
@@ -660,6 +711,25 @@ Two implications:
    will be dominated by pairs the model structurally cannot match.
 2. **π and F_st are not independent statistics here** (r = −0.72 / −0.92 in 2015/2023). Fitting
    both with equal weight after MAD-standardization partly double-counts one signal.
+3. **The two isolates also dominate the observed π *spread*** [VERIFIED 2026-08-11]. Dropping the
+   single site cuts the fitted between-site log-sd of π from **0.0422 → 0.0212** in 2015
+   (`Mortensen9-2015`, 50% of the spread) and **0.0477 → 0.0155** in 2023 (`H41-2023`, 67%).
+   2019, which has no isolate, sits at 0.0160 already. So the *genuine* between-site π spread is
+   **0.014–0.021** in all three years, and roughly half of the raw spread is the artifact.
+
+   This matters for reading §6.1.1: simulated π spread falls with POPMULT (log-sd 0.10–0.13 at
+   POPMULT=500, 0.028 at 2000, 0.010 at 5000). Against the *raw* observed spread the simulation
+   looks 4× too flat at POPMULT=5000; against the **cleaned** spread it is only ~1.5×, and the
+   observed value is bracketed inside the prior (matching around POPMULT ≈ 3000–4000). The
+   simulation is not failing to produce structure — it is failing to produce an artifact, which
+   is correct behaviour.
+
+   **Caveat, unresolved:** it is *not* established that simulated and observed π covary
+   site-by-site. If they do not, then `pi_loss` partly rewards a flat simulation for being closer
+   in L1 to a scattered target than a differently-scattered simulation would be — which would
+   make π's apparent preference for large POPMULT partly spurious. Checking this needs the
+   per-subpop π vectors, which `mu_calibrate.py` currently summarises rather than stores. **Do
+   this before trusting a POPMULT posterior driven by π.**
 
 **There is deliberately no `total_loss` during the pass.** The combined standardized distance
 `D = sqrt(Σ_j w_j (loss_j/σ_j)²)` with `σ_j = 1.4826·MAD` is built **offline** by
@@ -698,7 +768,7 @@ Real-data IBD slopes finite: 2015 −1.42e-3, 2019 +8.04e-4, 2023 +1.44e-4 (weak
 | `total_migration` | `U(0.001, 0.301)` | **placeholder ceiling** — needs a biological bound |
 | `pop` (POPMULT) | `U(2000, 12000)` | ≈ 6.7k–40k individuals |
 | `numClusters` | {1,2,3} | **CSV records the raw draw; actual count is ×33** |
-| `mutation_rate` | `lognorm(s=0.5, scale=5e-6)` | **calibrated to the broken π target — rebuild** |
+| `mutation_rate` | `lognorm(s=0.05, scale=4.646e-7)` | **recalibrated 2026-08-11 (§6.1.1).** `s` tightened 0.5→0.05: at 0.5 a single draw swung π ±65%, swamping both the observed between-site spread (0.014–0.021) and the ±3% POPMULT drift. Kept free as a nuisance dimension; **report θ=4Nμ, never μ** |
 | `recombination_rate` | fixed 2.75e-6 | now reaches SLiM too (§6.3); still not inferred |
 
 ---
@@ -739,6 +809,8 @@ Real-data IBD slopes finite: 2015 −1.42e-3, 2019 +8.04e-4, 2023 +1.44e-4 (weak
 | `SLiM_Code/CPBSampleSim{Linux,Win}.slim` | Forward sim. Neutral, `mutationRate(0)`. Takes `-d POPMULT` and `-d RECOMB` (§6.3), default simplification (§6.4). The two files are identical apart from path separators — **fix both or neither.** |
 | `diagnostics/qdriver.py` | **BROKEN — do not use** (found 2026-08-04). Drifted from production three ways: `simplificationRatio=INF` in its SLiM template (the §6.4 bug), `--slim-rho` default `1e-8` (the §6.3 bug value), and a `determine_migration_rates(distances, modifier=...)` call whose signature no longer exists → `TypeError` on every run. Fix or delete before trusting anything it produced. |
 | `diagnostics/ridge_sweep.py` | §6.2.1 harness. `--setup` builds a `.trees` via the production path; each subsequent call runs one `4·Ne·μ = const` ridge point and appends JSON to `out/ridge_*.jsonl` (one point per process, so a failure costs only that point). Reports branch-mode diversity mean/sd/**CV**, site π, F_st, plus wall time and peak RSS. |
+| `diagnostics/mu_calibrate.py` | §6.1.1 harness. Recapitates **once** (μ-free), then sweeps μ over cheap mutation overlays to solve `pi_loss` exactly (weighted median in log space, §7.0 mask applied). One POPMULT per process; appends JSON to `out/mu_calibration.jsonl`. `--skip-slim` reuses the `.trees` on disk. Also reports `fst_loss` at the calibrated μ, so both fitted statistics land in one run. |
+| `diagnostics/mu_calibrate_summary.py` | Tabulates `out/mu_calibration.jsonl`: μ vs POPMULT, `branch_div` against its hard ceiling, the Monte-Carlo spread of the μ iterates, per-year sim-vs-obs log spread, and the saturation extrapolation. |
 | `diagnostics/qpost.py` | Post-process an existing `.trees` → branch diversity, site π, F_st. Fast; no SLiM needed. |
 | `ToUseOnBeagles/*` | Empirical-side pipeline (§5). Runs on the Beagle machine, not here. |
 
