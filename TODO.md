@@ -1,4 +1,4 @@
-# TODO — updated 2026-08-04
+# TODO — updated 2026-08-12
 
 Remaining work. Project context is in **`CLAUDE.md`**; section references (§) point there.
 
@@ -102,19 +102,38 @@ identical to 4 s.f. across every entry — the `NORMALISE_BY` switch to callable
       draw swung π by ±65%, swamping both the observed between-site spread (0.014–0.021) and the
       ±3% POPMULT drift, so `pi_loss` would have ranked draws mostly on the μ draw. `s=0.05` is
       sized to the calibration's own uncertainty (~1% Monte-Carlo + ~3% POPMULT coupling).
-      **Residual, stated honestly:** at `s=0.05` the μ prior still has log-sd 0.0495, ~1.6× the
-      POPMULT-driven π drift — so π remains more sensitive to μ than to POPMULT. Survivable
-      (μ marginalises out in rejection ABC; the cost is acceptance efficiency, not bias), but
-      **consider `s=0.02` if π should discriminate POPMULT directly.**
+      **~~Residual~~ RESOLVED 08-12 — `s` is now 0.02**, and the earlier residual was understated.
+      Measured (§7.2.1): `calculate_losses` applies no level re-fit, so a μ draw shifts every
+      simulated log π bodily into `pi_loss`. Median injected `pi_loss` is **0.0401 at `s=0.05`**
+      against a POPMULT-driven signal range of **0.0459** — i.e. a typical μ draw moved the
+      distance as far as the *entire* POPMULT prior, so `pi_loss` would have ranked draws mostly on
+      μ. At `s=0.02` the injection is 0.0243 against a flat floor of 0.0209. `s=0.01` (0.0220) was
+      rejected as overconfident — tighter than the ~3% POPMULT coupling the prior exists to absorb.
       **(b) done 08-11** — `ABCAnalysisNoRedis.py:12-16` rewritten with the calibration provenance.
       **(c) still open** — make `abc_standardize.py` report **θ = 4Nμ**, never μ alone.
 
-- [ ] **Check whether simulated and observed π covary site-by-site** (§7.2, implication 3). Not
-      established. If they do not, `pi_loss` partly rewards a *flat* simulation for sitting closer
-      in L1 to a scattered target than a differently-scattered simulation would — which would make
-      π's apparent preference for large POPMULT partly spurious. Needs the per-subpop π vectors,
-      which `mu_calibrate.py` summarises rather than stores (a small change to it). **Do this
-      before trusting a POPMULT posterior driven by π.**
+- [x] ~~**Check whether simulated and observed π covary site-by-site**~~ — **done 08-12,
+      `diagnostics/pi_covary.py`, write-up in §7.2.1. They do NOT.** Per-year Pearson
+      −0.091/+0.538/−0.021 (p = 0.61/0.027/0.91), pooled +0.025 (p=0.86); 2019's nominal hit is
+      leveraged (Spearman 0.194) and does not replicate — the sim's low-π demes are the same three
+      cluster rows every year while the observed ranks shuffle. **The decisive number: a
+      structureless simulation scores `pi_loss` = 0.02094**, and that floor depends only on the
+      *observed* vectors, so it applies at every POPMULT already run — 500 is 3.21× worse than it,
+      2000 is 1.38× worse, and 5000 sits **at** it (1.02×). Correctly-placed structure buys 2.0%.
+      **So the suspicion was right: `pi_loss` is scoring flatness.** π's POPMULT information is
+      one-sided and saturating — it excludes small POPMULT but cannot peak, because L1 never
+      penalises a too-flat simulation. **Do not read a large-N π signal as corroborating F_st.**
+
+- [ ] **NEW (§6.6) — simulated π is computed over whole demes (338–714 diploids) rather than the
+      year's real per-site counts (4–19).** A 60–172× mismatch, and it reads as a violation of §8
+      invariant 1. The π *level* is unaffected (pairwise diversity is unbiased at any n), so the
+      μ calibration stands — but the *spread* comparison is not: the observed vector carries
+      sampling noise the simulated one lacks entirely. Two consequences worth chasing before the
+      pass: it means **"the sim is 1.5× too flat" (§7.2 impl. 3) is partly correct behaviour**, and
+      it is a **live alternative explanation for the §7.2.1 null** (a real site-level signal could
+      be buried in observed-side noise). Fix by subsampling the simulated demes to the real counts
+      and **recomputing** — never by slicing (§8 invariant 2). Costs nothing extra: recapitation is
+      already paid for and smaller sample sets make the statistics cheaper.
 - [x] ~~**Re-calibrate μ at the POPMULT you actually intend to run.**~~ — **done 08-11**,
       `diagnostics/mu_calibrate.py`, results in `out/mu_calibration.jsonl`, write-up in §6.1.1.
       **`DEFAULT_MUTATION_RATE = 4.646e-7`** (was 5e-6, i.e. **10.8× too large**), calibrated at
@@ -143,6 +162,16 @@ identical to 4 s.f. across every entry — the `NORMALISE_BY` switch to callable
 ---
 
 ## 2. Pipeline / code
+
+- [ ] **Windows Smart App Control blocks scikit-learn on the dev box — `Main.py` cannot run
+      locally** (found 08-12, §3). `VerifiedAndReputablePolicyState = 1`; the unsigned
+      `sklearn/metrics/_dist_metrics.cp312-win_amd64.pyd` is refused at load. Only the KMeans step
+      is affected — numpy/scipy/tskit/msprime/pyslim all load fine, and diagnostics reusing
+      `data/cluster_data.csv` with `--skip-slim` are unaffected. **Sohan's call:** turning Smart App
+      Control off is a one-way change via Windows Security → App & browser control. Not a CHTC
+      problem. Mitigated in code by making `import Main` lazy inside `model()`
+      (`ABCAnalysisNoRedis.py`), which also decouples the loss/statistics half from the simulation
+      stack so diagnostics reuse the real `get_keep_mask`/readers.
 
 - [ ] **`diagnostics/qdriver.py` is broken — fix or delete** (found 08-04). Three drifts from
       production, any one of which invalidates its output: `simplificationRatio=INF` in its SLiM
@@ -279,6 +308,12 @@ identical to 4 s.f. across every entry — the `NORMALISE_BY` switch to callable
       (r = −0.72 in 2015, −0.92 in 2023; §7.2), so equal weights after MAD-standardization partly
       weight one signal twice. Now that the fitted set is only these two, that is the whole
       distance. Consider unequal `WEIGHTS` in `abc_standardize.py` once the pilot batch exists.
+      **§7.2.1 sharpens this into a concrete risk.** `pi_loss` saturates at a floor of 0.0209 and
+      is one-sided, so across a pilot batch drawn from `pop ~ U(2000, 12000)` — all of it at or
+      near that floor — π's residual variation will be mostly the μ draw plus coalescent noise,
+      not POPMULT. MAD-standardizing that small spread would then **inflate** a near-noise
+      statistic to parity with F_st, which is the one carrying the peak. Inspect the per-statistic
+      MADs before accepting equal weights, and expect π to warrant *less* than half.
 - [ ] **Manual ABC-SMC iteration**, if wanted: take the top ~20% of trials, resample the prior
       around them, run another batch, repeat. Effectively SMC by hand. Note a single big rejection
       batch is unbiased with no importance weights; manual iteration needs them to stay that way.

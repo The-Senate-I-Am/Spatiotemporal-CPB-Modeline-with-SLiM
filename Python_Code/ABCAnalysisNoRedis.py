@@ -7,7 +7,12 @@ import shutil
 from pathlib import Path
 from scipy import stats
 
-import Main
+# Main is imported lazily inside model() -- it is the ONLY user of it (line ~236). Importing it
+# here dragged sklearn (via CollectData -> KMeans) into every consumer of this module, including
+# the diagnostics that only want _read_vector / _read_matrix / get_keep_mask and never simulate.
+# Keeping the loss/statistics half free of the simulation stack is what lets diagnostics/*.py
+# reuse the REAL mask and readers instead of reimplementing them -- which is exactly the drift
+# that broke qdriver.py (CLAUDE.md 9).
 
 # Operating parameter values.
 # mutation_rate is NOT a biological mutation rate (~2.1e-9) and must never be reported as one.
@@ -51,13 +56,25 @@ prior_distributions = {
     # swing in pi. That swamped both the observed between-site spread (1.4-2.1% in log units, once
     # the 7.2 isolate sites that dominate it are excluded) and the -3.2%/+2.1% pi drift that
     # carries POPMULT information -- pi_loss would have ranked draws mostly on the mu draw.
-    # s=0.05 is sized to the calibration's OWN uncertainty: ~1% Monte-Carlo (the mu iterates in
+    # s is sized to the calibration's OWN uncertainty: ~1% Monte-Carlo (the mu iterates in
     # out/mu_calibration.jsonl spread 0.44-0.99%) plus the ~3% POPMULT coupling across the prior.
+    #
+    # TIGHTENED 0.05 -> 0.02 on 2026-08-12, measured (diagnostics/pi_covary.py, 7.2.1). This
+    # function applies NO level re-fit, so a mu draw shifts every simulated log pi bodily and
+    # lands in pi_loss directly. Median pi_loss injected by the mu prior alone, against a
+    # POPMULT-driven signal range of 0.0459 over POPMULT 500->5000:
+    #     s=0.05 -> 0.0401 (90th pct 0.0845)   as large as the ENTIRE POPMULT range: mu would
+    #                                          dominate the ranking
+    #     s=0.02 -> 0.0243 (90th pct 0.0382)
+    #     s=0.01 -> 0.0220 (90th pct 0.0263)
+    # against a flat-simulation floor of 0.0209. 0.02 keeps the injection well inside the signal
+    # while still covering the calibration's real uncertainty; 0.01 would be tighter than the
+    # ~3% POPMULT coupling the prior is there to absorb, i.e. overconfident.
     # DELIBERATELY NOT covered here: the callable-sites denominator is provisional and biases the
     # pi target by order 10-20% (5.1). That is a SYSTEMATIC offset shared by every site and every
     # year, not a per-trial random quantity, so it belongs in a sensitivity re-calibration --
     # widening this prior to absorb it would only inject noise into the distance.
-    "mutation_rate": stats.lognorm(s=0.05, scale=DEFAULT_MUTATION_RATE),  # report theta=4*Ne*mu, never mu
+    "mutation_rate": stats.lognorm(s=0.02, scale=DEFAULT_MUTATION_RATE),  # report theta=4*Ne*mu, never mu
 }
 
 # --- Fitted-statistic configuration (CLAUDE.md 7) --------------------------------------------
@@ -233,6 +250,7 @@ def model(parameter):
     recombination_rate = parameter.get("recombination_rate", DEFAULT_RECOMBINATION_RATE)
 
     #Run the model - change silent to true for actual runs
+    import Main   # lazy: see the note beside the imports at the top of this file
     Main.main(num_clusters=numClusters, migration_rates_modifier=m, population_modifier=pop,
               total_migration=total_migration, mutation_rate=mutation_rate, recombination_rate=recombination_rate, silent=True)
     

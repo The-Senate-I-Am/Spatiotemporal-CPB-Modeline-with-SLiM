@@ -52,7 +52,9 @@ import tskit
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "Python_Code"))
 import ABCAnalysisNoRedis as ABC  # noqa: E402  (for _read_vector / _read_matrix / get_keep_mask)
-import CollectData, GenerateClusterData, GenerateSimulationParams  # noqa: E402
+# CollectData / GenerateClusterData / GenerateSimulationParams are imported inside run_slim():
+# they pull in sklearn, which --skip-slim has no use for (the clustering it would redo is already
+# on disk in data/cluster_data.csv).
 
 KMEANS_SEED = 42
 TIMES = {"2015": 16, "2019": 8, "2023": 0}
@@ -87,6 +89,28 @@ def genome_indices(cluster_data, year):
     return idx
 
 
+def site_names(year):
+    """Site names in specifier-matrix row order (col 0) -- the project's canonical subpop
+    ordering (CLAUDE.md 4). Same file get_keep_mask reads, so the mask indexes these directly."""
+    names = []
+    with open(Path(f"../data/Genetic_Data/specifier_matrix_{year}.csv"), encoding="utf-8") as f:
+        for line in f:
+            if line.strip():
+                names.append(line.split(",")[0].strip())
+    return names
+
+
+def site_counts(year):
+    """Diploid individuals per site from the popfile, keyed by site name."""
+    counts = {}
+    with open(Path(f"../data/Genetic_Data/popFile{year}"), encoding="utf-8") as f:
+        for line in f:
+            parts = line.split()
+            if len(parts) >= 2:
+                counts[parts[1].strip()] = counts.get(parts[1].strip(), 0) + 1
+    return counts
+
+
 def weighted_median(values, weights):
     """Exact minimiser of sum_i w_i * |x - v_i|. Ties resolved to the midpoint of the flat
     interval, which is also a minimiser and is stable under reordering."""
@@ -106,6 +130,8 @@ def run_slim(popmult, num_clusters, recomb, total_migration, scale):
 
     Writes the same data/ files production does (it overwrites in place, 10).
     """
+    import CollectData, GenerateClusterData, GenerateSimulationParams  # noqa: PLC0415
+
     warnings.filterwarnings("ignore")
     field_data = CollectData.read_csv(Path("../data/final_data_for_modeling.csv"))
     GenerateClusterData.cluster_coordinates(field_data, n_clusters=num_clusters, iters=2000,
@@ -243,6 +269,26 @@ def main(a):
             "obs_geo": float(np.exp(np.log(obs[y]).mean())),
             "obs_log_sd": float(np.log(obs[y]).std()),
             "pi_loss_year": float(np.mean(np.abs(np.log(pis[y]) - np.log(obs[y])))),
+        }
+
+    # ---- per-subpop VECTORS, not just their summaries (TODO 1 / CLAUDE.md 7.2 impl. 3) ------
+    # pi_loss is element-wise, so it only earns its element-wise form if sim and obs deviations
+    # line up SITE BY SITE. That cannot be read off means and sds -- it needs the vectors. Stored
+    # in specifier-matrix row order, masked to the fitted subpops, so every array below is
+    # index-aligned. branch_div is the mu-free shape (no mutation Monte-Carlo noise at all);
+    # deme_rel_size is the sim's own mechanism for making one deme more diverse than another.
+    avg_count = cluster_data["Average Count"].to_numpy(dtype=float)
+    for y in TIMES:
+        names = [n for n, k in zip(site_names(y), keep[y]) if k]
+        counts = site_counts(y)
+        rec.setdefault("vectors", {})[y] = {
+            "sites": names,
+            "obs_n": [int(counts[n]) for n in names],
+            "sim_n": [int(len(s) // 2) for s in ss[y]],
+            "pi_sim": [float(v) for v in pis[y]],
+            "pi_obs": [float(v) for v in obs[y]],
+            "branch_div": [float(v) for v in branch[y]],
+            "deme_rel_size": [float(avg_count[c]) for c, k in zip(gi[y], keep[y]) if k],
         }
 
     # fst at the calibrated mu -- mu-invariant, so this is just "where does this POPMULT sit on

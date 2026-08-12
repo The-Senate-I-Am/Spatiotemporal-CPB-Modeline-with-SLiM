@@ -91,6 +91,21 @@ python 3.12.** Internally consistent SLiM-5 stack; the pipeline runs end to end.
 > An older note claimed "SLiM 4.3 tree sequences need pyslim 1.0.x; pyslim 1.1+ fails." That
 > described the *old* env. Do **not** downgrade pyslim on this env.
 
+> **[OPEN 2026-08-12] Windows Smart App Control blocks scikit-learn on the dev box, so `Main.py`
+> cannot run there.** `HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy\VerifiedAndReputablePolicyState
+> = 1`; the unsigned `sklearn/metrics/_dist_metrics.cp312-win_amd64.pyd` fails to load with
+> `ImportError: DLL load failed ... An Application Control policy has blocked this file`
+> (CodeIntegrity/Operational events 3033/3077/3118). Everything else in the stack — numpy, scipy,
+> tskit, msprime, pyslim — loads fine, so **only the KMeans clustering step is affected**;
+> diagnostics that reuse `data/cluster_data.csv` and `--skip-slim` are unaffected. Turning Smart
+> App Control off is a **one-way** change through Windows Security → App & browser control, and
+> nothing else. Not a CHTC problem (Linux containers).
+>
+> This is why `import Main` in `ABCAnalysisNoRedis.py` is now **lazy, inside `model()`** — its only
+> caller. That keeps the loss/statistics half of the module (`_read_vector`, `_read_matrix`,
+> `get_keep_mask`) importable without the simulation stack, so diagnostics reuse the **real** mask
+> and readers instead of reimplementing them — the drift that broke `qdriver.py` (§9).
+
 ### 3.1 Per-run cost [VERIFIED 2026-07-31, measured post-§6.3/§6.4, numClusters=33]
 
 All on one 15.2 GB Windows box. Peak memory is the OS high-water mark (`peak_wset`), tracked
@@ -594,6 +609,39 @@ changes what is available to the sampler, so it is a design decision, not a free
   term is fixed at `ancestral_Ne`, so the largest contribution to π is unaffected. Both blockers
   are parameter problems, not coalescent subtleties. Worth re-asking once §6.1/§6.4 are settled.
 
+### 6.6 Simulated π is computed over WHOLE DEMES, not the empirical sample sizes [OPEN — found 2026-08-12]
+
+Numbered last only to keep §6.5's cross-references stable; by distortion this belongs near the top.
+
+`AnalyzeTreeSeq.py` (and `mu_calibrate.py`, which mirrors it) builds each sample set as
+`ts.samples(population=i, time=t)` — *every* node in the deme at that timepoint, because gens
+308/316 permanently Remember every individual in every subpop (§6.4). Measured at POPMULT=5000:
+
+| year | simulated diploids/subpop | observed n |
+|---|---|---|
+| 2015 | 395–714 | 4–19 |
+| 2019 | 429–714 | 5–7 |
+| 2023 | 338–714 | 5–11 |
+
+That is a **60–172× mismatch**, and it reads as a violation of **§8 invariant 1** ("subsample to
+the same per-subpop counts"). Consequences, distinguishing what is and is not affected:
+
+- **The π *level* is fine.** Pairwise diversity is unbiased at any n ≥ 2, so the μ calibration
+  (§6.1.1) is not compromised.
+- **The π *spread* is not.** The simulated vector carries essentially no sampling noise while the
+  observed one is estimated from 4–19 diploids. So part of the observed between-site scatter is
+  sampling noise the model structurally cannot reproduce — the same shape of problem as the §7.2
+  isolate artifact. **The simulation being "1.5× too flat" (§7.2 impl. 3) is therefore partly
+  correct behaviour, and the true gap is smaller than that.**
+- It also **attenuates any real correlation**, so it is a live alternative explanation for the
+  §7.2.1 null result — the site-level signal could exist and be buried in observed-side noise.
+
+**Do not fix this by slicing** — recompute on the subsampled node set (§8 invariants 1 and 2). The
+honest test is to subsample the simulated demes to the year's real per-site counts and re-measure
+both the spread and §7.2.1's correlation. Until that is done, "the sim is too flat" is not
+established at the stated magnitude. Note the fix costs nothing extra in the expensive phase:
+recapitation is already paid for, and a smaller sample set makes the statistics cheaper.
+
 ---
 
 ## 7. The ABC distance — design
@@ -724,12 +772,8 @@ Two implications:
    simulation is not failing to produce structure — it is failing to produce an artifact, which
    is correct behaviour.
 
-   **Caveat, unresolved:** it is *not* established that simulated and observed π covary
-   site-by-site. If they do not, then `pi_loss` partly rewards a flat simulation for being closer
-   in L1 to a scattered target than a differently-scattered simulation would be — which would
-   make π's apparent preference for large POPMULT partly spurious. Checking this needs the
-   per-subpop π vectors, which `mu_calibrate.py` currently summarises rather than stores. **Do
-   this before trusting a POPMULT posterior driven by π.**
+   **~~Caveat, unresolved:~~ ANSWERED 2026-08-12 — they do NOT covary. See §7.2.1.** The
+   suspicion was right: `pi_loss` is scoring flatness, not site-level fit.
 
 **There is deliberately no `total_loss` during the pass.** The combined standardized distance
 `D = sqrt(Σ_j w_j (loss_j/σ_j)²)` with `σ_j = 1.4826·MAD` is built **offline** by
@@ -768,8 +812,66 @@ Real-data IBD slopes finite: 2015 −1.42e-3, 2019 +8.04e-4, 2023 +1.44e-4 (weak
 | `total_migration` | `U(0.001, 0.301)` | **placeholder ceiling** — needs a biological bound |
 | `pop` (POPMULT) | `U(2000, 12000)` | ≈ 6.7k–40k individuals |
 | `numClusters` | {1,2,3} | **CSV records the raw draw; actual count is ×33** |
-| `mutation_rate` | `lognorm(s=0.05, scale=4.646e-7)` | **recalibrated 2026-08-11 (§6.1.1).** `s` tightened 0.5→0.05: at 0.5 a single draw swung π ±65%, swamping both the observed between-site spread (0.014–0.021) and the ±3% POPMULT drift. Kept free as a nuisance dimension; **report θ=4Nμ, never μ** |
+| `mutation_rate` | `lognorm(s=0.02, scale=4.646e-7)` | **recalibrated 2026-08-11 (§6.1.1); `s` tightened 0.5→0.05→0.02, the last step measured 2026-08-12 (§7.2.1).** At `s=0.05` the μ prior alone injects median `pi_loss` 0.0401 — as large as the *entire* POPMULT signal range (0.0459), so it would have ranked draws mostly on μ. At 0.02 it injects 0.0243 against a flat floor of 0.0209. Kept free as a nuisance dimension; **report θ=4Nμ, never μ** |
 | `recombination_rate` | fixed 2.75e-6 | now reaches SLiM too (§6.3); still not inferred |
+
+### 7.2.1 π does NOT covary site-by-site — `pi_loss` scores flatness [VERIFIED 2026-08-12]
+
+`diagnostics/pi_covary.py`, on the per-subpop vectors `mu_calibrate.py` now stores. POPMULT=5000,
+numClusters=33, seed 1 (the re-run reproduced μ=4.646e-7, `pi_loss`=0.02132, `fst_loss`=0.00830
+exactly, so this sits on the same tree as §6.1.1).
+
+**Test A — correlation of log π_sim against log π_obs**, site-label permutation null, 9999 perms
+(a permutation test for the same reason as §7.1: few sites, coupled by migration):
+
+| year | n | Pearson | p | Spearman | p | vs `branch_div` | p |
+|---|---|---|---|---|---|---|---|
+| 2015 | 22 | −0.091 | 0.61 | −0.068 | 0.77 | −0.092 | 0.60 |
+| 2019 | 17 | +0.538 | **0.027** | +0.194 | 0.46 | +0.550 | 0.020 |
+| 2023 | 20 | −0.021 | 0.91 | +0.146 | 0.54 | −0.034 | 0.85 |
+| pooled | 59 | +0.025 | 0.86 | | | | |
+
+**2019's nominal hit is not real.** Spearman is only 0.194, so the Pearson is leveraged by a few
+points; one p<0.05 in three tests is ordinary; and it **does not replicate**. The simulation's
+low-diversity demes are *the same three cluster rows every year* (`Alsum18`/`Alsum59`/`Arlington`,
+`branch_div` ≈ 26.1–26.4k against ≈27.0k elsewhere) — fixed simulated structure against a shuffling
+observed rank. They are low-π in 2019, but `Alsum25`/`Alsum140` are among the **highest** observed
+π in 2015, and 2023 splits.
+
+**Test B — the flat-simulation floor. This is the decisive number.** `pi_loss` for a
+*structureless* simulation, levelled by the same weighted-median rule, is **0.02094**. It depends
+only on the *observed* vectors, so it applies at every POPMULT already measured — no re-simulation:
+
+| POPMULT | `pi_loss` | vs flat floor | sim log-sd |
+|---|---|---|---|
+| 500 | 0.06717 | **3.21× worse** | 0.1187 |
+| 2000 | 0.02898 | 1.38× worse | 0.0295 |
+| 5000 | 0.02132 | **1.02× — at the floor** | 0.0105 |
+
+**No POPMULT tested beats a simulation with no between-site structure at all.** The whole
+0.067→0.021 improvement is excess *uncorrelated* scatter decaying to that floor, and it saturates.
+
+**Test C — shuffle null in the units of the objective** (permute the sim within year, re-calibrate
+μ each time): real 0.02052, null mean 0.02238 ± 0.00113, **percentile 5.5, p = 0.055**. The
+ordering `real (0.0205) < flat (0.0209) < shuffled (0.0224)` is exactly the L1 geometry — scatter
+in the wrong place is worse than no scatter. Correctly-placed structure buys **+2.0%** of
+`pi_loss`. (Verified on synthetic data first, per §10: a flat sim beat an uncorrelated
+equal-spread sim in **400/400** draws.)
+
+**Consequence — π's POPMULT information is one-sided and saturating, not peaked.** It genuinely
+excludes small POPMULT (500 is 3.2× worse than saying nothing), but above ≈5000 it is already at
+the floor and cannot discriminate further. L1 **never penalises the simulation for being too
+flat**, so the preference runs monotonically upward and identifies no optimum. **Do not read a
+large-N π signal as corroborating F_st** — F_st carries the actual peak (§6.2, wanting POPMULT
+≈6000), and the two are not independent anyway (§7.2: r = −0.72/−0.92). Keep π fitted — the lower
+bound is real — but treat it as a bound plus a posterior-predictive check, not as a second vote.
+
+**Mechanism probe, unexplained:** corr(log `branch_div`, log deme size) is **negative** in all
+three years (−0.217/−0.284/−0.156). Larger demes show *slightly lower* diversity, which is
+backwards for drift. The effect is tiny (sim log-sd 0.010) and the three low-`branch_div` demes are
+also among the largest, so isolation is probably confounded with size here. [OPEN] — but note
+this means the simulation's per-site π variation is **not** deme-size-driven, i.e. its only
+plausible route to matching observed π site-by-site is not the one operating.
 
 ---
 
@@ -809,7 +911,8 @@ Real-data IBD slopes finite: 2015 −1.42e-3, 2019 +8.04e-4, 2023 +1.44e-4 (weak
 | `SLiM_Code/CPBSampleSim{Linux,Win}.slim` | Forward sim. Neutral, `mutationRate(0)`. Takes `-d POPMULT` and `-d RECOMB` (§6.3), default simplification (§6.4). The two files are identical apart from path separators — **fix both or neither.** |
 | `diagnostics/qdriver.py` | **BROKEN — do not use** (found 2026-08-04). Drifted from production three ways: `simplificationRatio=INF` in its SLiM template (the §6.4 bug), `--slim-rho` default `1e-8` (the §6.3 bug value), and a `determine_migration_rates(distances, modifier=...)` call whose signature no longer exists → `TypeError` on every run. Fix or delete before trusting anything it produced. |
 | `diagnostics/ridge_sweep.py` | §6.2.1 harness. `--setup` builds a `.trees` via the production path; each subsequent call runs one `4·Ne·μ = const` ridge point and appends JSON to `out/ridge_*.jsonl` (one point per process, so a failure costs only that point). Reports branch-mode diversity mean/sd/**CV**, site π, F_st, plus wall time and peak RSS. |
-| `diagnostics/mu_calibrate.py` | §6.1.1 harness. Recapitates **once** (μ-free), then sweeps μ over cheap mutation overlays to solve `pi_loss` exactly (weighted median in log space, §7.0 mask applied). One POPMULT per process; appends JSON to `out/mu_calibration.jsonl`. `--skip-slim` reuses the `.trees` on disk. Also reports `fst_loss` at the calibrated μ, so both fitted statistics land in one run. |
+| `diagnostics/mu_calibrate.py` | §6.1.1 harness. Recapitates **once** (μ-free), then sweeps μ over cheap mutation overlays to solve `pi_loss` exactly (weighted median in log space, §7.0 mask applied). One POPMULT per process; appends JSON to `out/mu_calibration.jsonl`. `--skip-slim` reuses the `.trees` on disk. Also reports `fst_loss` at the calibrated μ, so both fitted statistics land in one run. **Since 2026-08-12 it also stores the per-subpop VECTORS** (`pi_sim`, `pi_obs`, `branch_div`, `deme_rel_size`, site names, both sample sizes) under `vectors`, which is what `pi_covary.py` consumes — summaries alone cannot answer a site-by-site question. |
+| `diagnostics/pi_covary.py` | §7.2.1 harness. Reads the per-subpop vectors stored by `mu_calibrate.py` — **no simulation, no recapitation, runs in seconds.** Three tests: site-label permutation correlation, the flat-simulation `pi_loss` floor (a property of the *observed* vectors alone, so it applies at every POPMULT without re-running), and a shuffle null in the units of the objective. `--dump` prints the per-site table. |
 | `diagnostics/mu_calibrate_summary.py` | Tabulates `out/mu_calibration.jsonl`: μ vs POPMULT, `branch_div` against its hard ceiling, the Monte-Carlo spread of the μ iterates, per-year sim-vs-obs log spread, and the saturation extrapolation. |
 | `diagnostics/qpost.py` | Post-process an existing `.trees` → branch diversity, site π, F_st. Fast; no SLiM needed. |
 | `ToUseOnBeagles/*` | Empirical-side pipeline (§5). Runs on the Beagle machine, not here. |
