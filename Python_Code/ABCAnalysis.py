@@ -12,6 +12,7 @@ from pyabc.transition import MultivariateNormalTransition
 from pyabc.sampler import RedisEvalParallelSampler
 
 import Main
+from ABCAnalysisNoRedis import DEFAULT_MUTATION_RATE, DEFAULT_RECOMBINATION_RATE
 
 pyabc.settings.set_figure_params('pyabc')  # for beautified plots
 
@@ -39,7 +40,10 @@ def model(parameter):
     numClusters = parameter["numClusters"] * 33  #scale to 33, 66, or 99
     
     #Run the model
-    Main.main(num_clusters=numClusters, migration_rates_modifier=m, population_modifier=pop, silent=True)
+    # mutation_rate is now required by Main.main() (no silent wrong-scale default; CLAUDE.md 10).
+    Main.main(num_clusters=numClusters, migration_rates_modifier=m, population_modifier=pop,
+              mutation_rate=DEFAULT_MUTATION_RATE, recombination_rate=DEFAULT_RECOMBINATION_RATE,
+              silent=True)
     
     
     #Read in the output data

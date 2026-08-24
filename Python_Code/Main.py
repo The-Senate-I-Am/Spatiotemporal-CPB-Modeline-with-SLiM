@@ -22,7 +22,18 @@ import sys
 # every summary statistic depend on) is stable across ABC iterations. See CLAUDE.md 5.6.
 KMEANS_SEED = 42
 
-def main(num_clusters, migration_rates_modifier, population_modifier, total_migration=0.05, mutation_rate=5e-6, recombination_rate=2.75e-6, ancestral_Ne=6700, silent=False):
+def main(num_clusters, migration_rates_modifier, population_modifier, total_migration=0.05, mutation_rate=None, recombination_rate=2.75e-6, ancestral_Ne=6700, silent=False):
+    # mutation_rate has NO default. It is not a biological rate -- it is half of a calibration
+    # constant whose only meaningful content is theta = 4*Ne_anc*mu (CLAUDE.md 6.1). The old
+    # default of 5e-6 was calibrated against the pre-2026-07-28 per-SNP pi target and is ~10.8x
+    # too large (6.1.1), so a silent fallback here would quietly reproduce a known-wrong
+    # diversity scale. Fail loudly instead (CLAUDE.md 10).
+    if mutation_rate is None:
+        raise ValueError(
+            "main() requires an explicit mutation_rate -- there is deliberately no default, "
+            "because mu sets the diversity scale and the old 5e-6 default is ~10.8x too large. "
+            "Pass ABCAnalysisNoRedis.DEFAULT_MUTATION_RATE (4.646e-7, calibrated at "
+            "POPMULT=5000; see CLAUDE.md 6.1.1).")
     #for cleanliness
     warnings.filterwarnings("ignore")
     
@@ -92,4 +103,15 @@ if __name__ == "__main__":
     #Query for population modifier
     population_modifier = float(input("Enter the total population size (default 10000): ").strip() or 10000)
     
-    main(num_clusters, migration_rates_modifier, population_modifier)
+    # Single source of truth for the calibration constant. Imported here rather than at module
+    # scope so the simulation path keeps no import-time dependency on the ABC driver -- the
+    # reverse direction (ABCAnalysisNoRedis -> Main) is deliberately lazy too (CLAUDE.md 3).
+    from ABCAnalysisNoRedis import DEFAULT_MUTATION_RATE, DEFAULT_RECOMBINATION_RATE
+
+    #Query for the mutation rate. NOT a biological rate -- see CLAUDE.md 6.1.1; report theta=4*Ne*mu.
+    mutation_rate = float(input(
+        f"Enter the mutation rate (default {DEFAULT_MUTATION_RATE:g}, calibrated): ").strip()
+        or DEFAULT_MUTATION_RATE)
+
+    main(num_clusters, migration_rates_modifier, population_modifier,
+         mutation_rate=mutation_rate, recombination_rate=DEFAULT_RECOMBINATION_RATE)
