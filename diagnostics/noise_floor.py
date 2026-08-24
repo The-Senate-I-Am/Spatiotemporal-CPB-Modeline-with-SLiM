@@ -96,11 +96,132 @@ def read_sim_outputs():
     return d
 
 
-def main(a):
-    for p in (Path("../data/cluster_data.csv"), Path("../data/migration_rates.csv")):
+def describe_inputs():
+    """What landscape is actually on disk, and do the two files agree?
+
+    The whole premise of this script is "nothing changed", so it must not silently inherit
+    whatever cluster/migration files some earlier experiment left behind -- the pipeline
+    overwrites data/ IN PLACE (CLAUDE.md 10). Read both inputs, cross-check them, and return them
+    so every jsonl record says which landscape it was measured on.
+    """
+    cd = Path("../data/cluster_data.csv")
+    mr = Path("../data/migration_rates.csv")
+    for p in (cd, mr):
         if not p.exists():
             raise FileNotFoundError(f"{p} missing -- this script reuses the clustering on disk "
                                     f"rather than re-running KMeans (see module docstring)")
+
+    # cluster_data.csv has a header row; SLiM sets numSubpops = propDF.nrow (CPBSampleSim*.slim:27).
+    with open(cd, newline="", encoding="utf-8") as f:
+        n_demes = sum(1 for _ in csv.reader(f)) - 1
+
+    # migration_rates.csv carries a header row AND an index column, both numeric-looking -- so a
+    # naive loadtxt "works" and returns a matrix one bigger than the landscape. Strip both.
+    with open(mr, newline="", encoding="utf-8") as f:
+        M = np.array([r[1:] for r in list(csv.reader(f))[1:]], dtype=float)
+
+    if M.shape != (n_demes, n_demes):
+        raise ValueError(
+            f"migration matrix is {M.shape} but cluster_data.csv has {n_demes} demes. The two "
+            f"files are out of sync, so SLiM would run a landscape that does not match the "
+            f"clustering. Regenerate both with Main.main() before measuring anything.")
+
+    off = M.sum(1) - np.diag(M)
+    tm = float(off.mean())
+    if off.std() > 1e-3 * max(tm, 1e-12):
+        raise ValueError(
+            f"off-diagonal row sums are not constant (mean={tm:.6g}, sd={off.std():.3g}). Each "
+            f"row must sum to exactly total_migration (CLAUDE.md 2) -- this matrix was not "
+            f"produced by the current determine_migration_rates().")
+
+    return {"n_demes": n_demes, "total_migration": tm}
+
+
+def summarize(rows, meta):
+    """Print the floor table and return it. Shared by the live run and --summarize."""
+    print("\n" + "=" * 84)
+    print(f"NOISE FLOOR  --  {len(rows)} replicates, identical parameters "
+          f"(POPMULT={meta['popmult']}, mu={meta['mu']:g}, anc_Ne={meta['anc_ne']})")
+    print(f"landscape: {meta['n_demes']} demes, total_migration={meta['total_migration']:.4g}")
+    if meta.get("fixed_tree"):
+        print("PARTIAL (--fixed-tree): recapitation + mutation only, forward phase held FIXED.")
+        print("  -> a strict LOWER BOUND. Good coverage for pi, poor for Fst (see docstring).")
+    print("=" * 84)
+    print(f"{'statistic':<12} {'mean':>10} {'sd':>10} {'min':>10} {'max':>10} "
+          f"{'mean|diff|':>11} {'CV%':>7}")
+
+    summary = {}
+    for k in LOSSES:
+        v = np.array([row[k] for row in rows], dtype=float)
+        pair = [abs(x - y) for x, y in itertools.combinations(v, 2)]
+        s = {"mean": float(v.mean()), "sd": float(v.std(ddof=1)) if len(v) > 1 else 0.0,
+             "min": float(v.min()), "max": float(v.max()),
+             "mean_pairwise_abs_diff": float(np.mean(pair)) if pair else 0.0,
+             "cv_pct": float(100 * v.std(ddof=1) / v.mean()) if len(v) > 1 else 0.0}
+        summary[k] = s
+        tag = "*" if k in FITTED else " "
+        print(f"{tag}{k:<11} {s['mean']:>10.5f} {s['sd']:>10.5f} {s['min']:>10.5f} "
+              f"{s['max']:>10.5f} {s['mean_pairwise_abs_diff']:>11.5f} {s['cv_pct']:>7.2f}")
+    print("  (* = fitted; the others are diagnostics and do not enter D)")
+
+    if len(rows) < 2:
+        print("\n  Only one replicate -- sd and mean|diff| are meaningless. Pool more with:")
+        print("      python noise_floor.py --summarize")
+        return summary
+
+    print("\n--- Is the floor small enough for the fitted statistics? ---")
+    for k, (lo, hi, note) in SIGNAL.items():
+        rng = abs(lo - hi)
+        noise = summary[k]["mean_pairwise_abs_diff"]
+        ratio = noise / rng if rng else float("inf")
+        verdict = ("OK -- signal well above noise" if ratio < 0.2 else
+                   "MARGINAL -- noise is a large fraction of the signal" if ratio < 0.5 else
+                   "PROBLEM -- noise comparable to or larger than the signal")
+        print(f"  {k}: run-to-run {noise:.5f}  vs  across-prior range {rng:.5f}  "
+              f"({100*ratio:.0f}%)  -> {verdict}")
+        print(f"      range is {note}")
+        summary[k]["signal_range"] = rng
+        summary[k]["noise_over_signal"] = ratio
+    return summary
+
+
+def do_summarize(a):
+    """Pool replicate records across processes -- the 1-rep-per-job path (see --reps help)."""
+    path = Path(a.out)
+    if not path.exists():
+        raise FileNotFoundError(f"{path} has no records yet")
+
+    reps = []
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            rec = json.loads(line)
+            if rec.get("kind") != "replicate":
+                continue                      # skip the per-process summary records
+            if rec["popmult"] != a.popmult or bool(rec["fixed_tree"]) != bool(a.fixed_tree):
+                continue
+            reps.append(rec)
+    if not reps:
+        raise SystemExit(f"no replicate records in {path} at POPMULT={a.popmult}, "
+                         f"fixed_tree={a.fixed_tree}")
+
+    # Pooling only means anything if every replicate saw the same landscape and the same mu.
+    for key in ("n_demes", "total_migration", "mu", "anc_ne"):
+        vals = {r[key] for r in reps}
+        if len(vals) > 1:
+            raise SystemExit(f"refusing to pool: replicates disagree on {key} -> {sorted(vals)}")
+    seeds = [r["seed"] for r in reps]
+    if len(set(seeds)) != len(seeds):
+        raise SystemExit(f"refusing to pool: duplicate seeds {sorted(seeds)} -- those replicates "
+                         f"re-draw the same genealogy, which would understate the floor")
+
+    print(f"pooled {len(reps)} replicate records from {path} (seeds {sorted(seeds)})")
+    summarize(reps, reps[0])
+
+
+def main(a):
+    meta = describe_inputs()
+    print(f"landscape on disk: {meta['n_demes']} demes, "
+          f"total_migration={meta['total_migration']:.4g}", flush=True)
 
     if not a.fixed_tree:
         # Fail loudly and early rather than after the first 20-minute recapitation (10).
@@ -119,6 +240,9 @@ def main(a):
     outdir = Path("../out/noise_floor")
     outdir.mkdir(parents=True, exist_ok=True)
 
+    common = {"popmult": a.popmult, "mu": a.mu, "recomb": a.recomb, "anc_ne": a.anc_ne,
+              "fixed_tree": a.fixed_tree, **meta}
+
     rows = []
     for r in range(a.reps):
         seed = a.seed0 + r
@@ -134,7 +258,7 @@ def main(a):
         AnalyzeTreeSeq.analyze_tree_sequence(mutation_rate=a.mu, recombination_rate=a.recomb,
                                              ancestral_Ne=a.anc_ne)
         sim = read_sim_outputs()
-        losses = ABC.calculate_losses(obs, sim)
+        losses = ABC.calculate_losses(obs, sim)   # (observed, simulated) -- matches production
         dt = time.perf_counter() - t0
 
         repdir = outdir / f"rep{r+1}"
@@ -146,52 +270,22 @@ def main(a):
 
         row = {"rep": r + 1, "seed": seed, "slim_s": slim_s, "total_s": dt, **losses}
         rows.append(row)
+
+        # Append THIS replicate immediately. A 3-rep run is ~1.6 h at POPMULT=5000 and OSPool
+        # evicts; writing only at the end would throw away every completed replicate when the job
+        # dies on the last one. Each record stands alone, and --summarize pools them.
+        with open(a.out, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"kind": "replicate", **common, **row}) + "\n")
+
         print("  " + "  ".join(f"{k}={losses[k]:.5g}" for k in LOSSES), flush=True)
-        print(f"  [{time.strftime('%H:%M:%S')}] replicate done in {dt/60:.1f} min", flush=True)
+        print(f"  [{time.strftime('%H:%M:%S')}] replicate done in {dt/60:.1f} min "
+              f"-> appended to {a.out}", flush=True)
 
-    # ---- summary -----------------------------------------------------------------------------
-    print("\n" + "=" * 84)
-    print(f"NOISE FLOOR  --  {a.reps} replicates, identical parameters "
-          f"(POPMULT={a.popmult}, mu={a.mu:g}, anc_Ne={a.anc_ne})")
-    if a.fixed_tree:
-        print("PARTIAL (--fixed-tree): recapitation + mutation only, forward phase held FIXED.")
-        print("  -> a strict LOWER BOUND. Good coverage for pi, poor for Fst (see docstring).")
-    print("=" * 84)
-    print(f"{'statistic':<12} {'mean':>10} {'sd':>10} {'min':>10} {'max':>10} "
-          f"{'mean|diff|':>11} {'CV%':>7}")
-    summary = {}
-    for k in LOSSES:
-        v = np.array([row[k] for row in rows], dtype=float)
-        pair = [abs(x - y) for x, y in itertools.combinations(v, 2)]
-        s = {"mean": float(v.mean()), "sd": float(v.std(ddof=1)) if len(v) > 1 else 0.0,
-             "min": float(v.min()), "max": float(v.max()),
-             "mean_pairwise_abs_diff": float(np.mean(pair)) if pair else 0.0,
-             "cv_pct": float(100 * v.std(ddof=1) / v.mean()) if len(v) > 1 else 0.0}
-        summary[k] = s
-        tag = "*" if k in FITTED else " "
-        print(f"{tag}{k:<11} {s['mean']:>10.5f} {s['sd']:>10.5f} {s['min']:>10.5f} "
-              f"{s['max']:>10.5f} {s['mean_pairwise_abs_diff']:>11.5f} {s['cv_pct']:>7.2f}")
-    print("  (* = fitted; the others are diagnostics and do not enter D)")
+    summary = summarize(rows, common)
 
-    print("\n--- Is the floor small enough for the fitted statistics? ---")
-    for k, (lo, hi, note) in SIGNAL.items():
-        rng = abs(lo - hi)
-        noise = summary[k]["mean_pairwise_abs_diff"]
-        ratio = noise / rng if rng else float("inf")
-        verdict = ("OK -- signal well above noise" if ratio < 0.2 else
-                   "MARGINAL -- noise is a large fraction of the signal" if ratio < 0.5 else
-                   "PROBLEM -- noise comparable to or larger than the signal")
-        print(f"  {k}: run-to-run {noise:.5f}  vs  across-prior range {rng:.5f}  "
-              f"({100*ratio:.0f}%)  -> {verdict}")
-        print(f"      range is {note}")
-        summary[k]["signal_range"] = rng
-        summary[k]["noise_over_signal"] = ratio
-
-    rec = {"popmult": a.popmult, "mu": a.mu, "recomb": a.recomb, "anc_ne": a.anc_ne,
-           "reps": a.reps, "seed0": a.seed0, "fixed_tree": a.fixed_tree,
-           "partial": a.fixed_tree, "rows": rows, "summary": summary}
     with open(a.out, "a", encoding="utf-8") as f:
-        f.write(json.dumps(rec) + "\n")
+        f.write(json.dumps({"kind": "summary", **common, "reps": a.reps, "seed0": a.seed0,
+                            "partial": a.fixed_tree, "rows": rows, "summary": summary}) + "\n")
 
     with open(outdir / "replicates.csv", "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=["rep", "seed", "slim_s", "total_s"] + LOSSES)
@@ -203,13 +297,22 @@ def main(a):
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--popmult", type=float, default=5000)
-    p.add_argument("--reps", type=int, default=3)
-    p.add_argument("--seed0", type=int, default=1001)
+    p.add_argument("--reps", type=int, default=3,
+                   help="replicates in THIS process. On OSPool prefer --reps 1 across several "
+                        "jobs (each ~30 min at POPMULT=5000) with a distinct --seed0 per job, "
+                        "then pool with --summarize")
+    p.add_argument("--seed0", type=int, default=1001,
+                   help="first SLiM seed; replicate r uses seed0+r. MUST NOT overlap between "
+                        "jobs -- repeated seeds re-draw the same genealogy and understate the floor")
     p.add_argument("--mu", type=float, default=4.646e-7)
     p.add_argument("--recomb", type=float, default=2.75e-6)
     p.add_argument("--anc-ne", type=int, default=6700)
     p.add_argument("--fixed-tree", action="store_true",
                    help="reuse out/simTreeSeq.trees; vary recapitation+mutation only (PARTIAL "
                         "floor -- required where slim.exe is blocked, see docstring)")
+    p.add_argument("--summarize", action="store_true",
+                   help="do not simulate; pool existing replicate records from --out and print "
+                        "the floor table (filtered by --popmult and --fixed-tree)")
     p.add_argument("--out", default="../out/noise_floor.jsonl")
-    main(p.parse_args())
+    args = p.parse_args()
+    do_summarize(args) if args.summarize else main(args)
