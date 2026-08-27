@@ -36,38 +36,21 @@ def calculate_diversity_and_divergence(ts, genome_indicies, time, output_diversi
     #Diversity (pi) per subpop -- all sample sets in a single traversal.
     diversities = np.asarray(ts.diversity(pop_samples), dtype=float)
 
-    #Divergence (d_xy) -- ALL pairs in one traversal via indexes= (verified bit-identical to
-    #per-pair calls, and ~orders of magnitude faster). Diagonal stays 0.
-    #
-    #Fst is HUDSON, computed here from pi and d_xy rather than by ts.Fst (CLAUDE.md 6.7):
-    #
-    #    Fst_Hudson = 1 - Hw / d_xy,      Hw = (pi_X + pi_Y)/2
-    #
-    #ts.Fst is DELIBERATELY NOT USED. It implements Nei (1973) / Slatkin (1991),
-    #    Fst_Nei = 1 - 2(pi_X + pi_Y)/(pi_X + 2 d_xy + pi_Y) = (d_xy - Hw)/(d_xy + Hw),
-    #which is a DIFFERENT quantity -- about HALF of Hudson at low differentiation, since
-    #Hudson = (d_xy - Hw)/d_xy and the two denominators differ by the factor (1 + Hw/d_xy) ~ 2.
-    #The empirical target is pixy's Weir-Cockerham (ToUseOnBeagles/AverageData.py), and WC and
-    #Hudson estimate the SAME parameter -- measured agreeing to 1-5% on a known-truth msprime
-    #2-deme model, against Nei/Hudson = 0.5027 on the same data. Fitting Nei against WC compared
-    #two different statistics and cost a factor of ~2 in the inferred POPMULT (6.7).
-    #
-    #Free: pi and d_xy are already in hand, so this drops the ts.Fst traversal rather than
-    #adding one. Fst is relative differentiation (~mu-invariant); computing it jointly here is
-    #fine -- the centring footgun is relatedness-specific (CLAUDE.md 8#2), not an Fst concern.
+    #Divergence (d_xy) -- ALL pairs in one traversal via indexes=. Diagonal stays 0.
+    #Fst is HUDSON, 1 - Hw/d_xy with Hw = (pi_X + pi_Y)/2. Do NOT switch to ts.Fst: that returns
+    #Nei/Slatkin, ~half of Hudson, and the empirical target is pixy's Weir-Cockerham, which
+    #matches Hudson (CLAUDE.md 6.7, invariant 9).
     divergences = np.zeros((K, K))
     fsts = np.zeros((K, K))
     if pairs:
         div_flat = ts.divergence(pop_samples, indexes=pairs)
         for (i, j), dv in zip(pairs, div_flat):
             divergences[i, j] = dv
-            # dv == 0 only for a degenerate pair (no variation at all); leave Fst at 0 rather
-            # than emitting a NaN/inf that would silently poison fst_loss downstream.
+            # dv == 0 only if the pair has no variation at all; 0 beats a NaN in fst_loss.
             fsts[i, j] = 0.0 if dv == 0 else 1.0 - 0.5 * (diversities[i] + diversities[j]) / dv
 
-    #Genetic relatedness, centred across THIS year's subpops by passing all sample sets to a
-    #single call (matches empirical per-year centring; never slice a larger matrix --
-    #CLAUDE.md 7#2/7#3). Reproduces CalcGenRel.py / tskit genetic_relatedness defaults.
+    #Relatedness is centred across THIS year's subpops -- one call with all sample sets.
+    #Never slice a larger matrix to get a smaller one (CLAUDE.md 8#2).
     gr_indexes = [(i, j) for i in range(K) for j in range(K)]
     gr = ts.genetic_relatedness(pop_samples, indexes=gr_indexes)
     relatedness = np.asarray(gr, dtype=float).reshape(K, K)
@@ -104,12 +87,8 @@ def analyze_tree_sequence(mutation_rate=None, recombination_rate=None, ancestral
     Fixed empirical point estimate (6700); exposed here for sensitivity analysis only, NOT
     inferred -- it is confounded with mu via pi = 4*Ne*mu. See CLAUDE.md 5.1.
     '''
-    # No defaults for mutation_rate/recombination_rate. The previous ones (1e-7 and 1e-8) were
-    # BOTH known-wrong scales: 1e-8 is the pre-6.3 hardcoded forward recombination value, and
-    # neither matches the calibrated mu (4.646e-7, 6.1.1) or the Cohen WI rate (2.75e-6). These
-    # two numbers set the diversity and linkage scales of every output file, and those files
-    # carry no record of which scale they are on -- so a silent fallback is worse than a crash
-    # (CLAUDE.md 10).
+    # No defaults: these set the diversity and linkage scale of every output file, and the files
+    # record no scale, so a silent fallback is worse than a crash (CLAUDE.md 10.1).
     if mutation_rate is None or recombination_rate is None:
         raise ValueError(
             "analyze_tree_sequence() requires explicit mutation_rate and recombination_rate. "
@@ -166,13 +145,8 @@ def analyze_tree_sequence(mutation_rate=None, recombination_rate=None, ancestral
         samplesToKeep.extend(ts.samples(population=idx, time=0))
     
     
-    # filter_populations=False is REQUIRED: the default (True) drops unreferenced populations and
-    # renumbers the survivors to be contiguous, which breaks the ts.samples(population=idx) queries
-    # in calculate_diversity_and_divergence (idx = original cluster-row index). With many demes
-    # (e.g. numClusters=99) some are unreferenced after simplify -> renumbering -> a high original
-    # index falls out of range -> empty sample set -> "Sample sets must contain at least one
-    # element". Keeping population indices stable also guarantees correct per-subpop stats at every
-    # cluster count (renumbering would otherwise silently map queries to the wrong deme).
+    # filter_populations=False is REQUIRED. The default renumbers surviving populations, which
+    # silently misaligns the ts.samples(population=idx) queries below (CLAUDE.md 2).
     ts = ts.simplify(samples=samplesToKeep, filter_populations=False)
     
     next_id = pyslim.next_slim_mutation_id(ts)

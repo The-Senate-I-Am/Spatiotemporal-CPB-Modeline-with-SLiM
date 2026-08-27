@@ -7,111 +7,38 @@ import shutil
 from pathlib import Path
 from scipy import stats
 
-# Main is imported lazily inside model() -- it is the ONLY user of it (line ~236). Importing it
-# here dragged sklearn (via CollectData -> KMeans) into every consumer of this module, including
-# the diagnostics that only want _read_vector / _read_matrix / get_keep_mask and never simulate.
-# Keeping the loss/statistics half free of the simulation stack is what lets diagnostics/*.py
-# reuse the REAL mask and readers instead of reimplementing them -- which is exactly the drift
-# that broke qdriver.py (CLAUDE.md 9).
+# Main is imported lazily inside model() so this module stays importable without the simulation
+# stack; diagnostics/*.py reuse the readers and get_keep_mask (CLAUDE.md 9).
 
-# Operating parameter values.
-# mutation_rate is NOT a biological mutation rate (~2.1e-9) and must never be reported as one.
-# It is half of a CALIBRATION CONSTANT: with ancestral_Ne pinned at 6700, the only quantity with
-# meaning is theta = 4*Ne_anc*mu, chosen so simulated pi reproduces observed pi = 0.0122
-# (CLAUDE.md 6.1). Report theta, never mu alone.
-#
-# CALIBRATED 2026-08-11 at POPMULT=5000, numClusters=33, total_migration=0.05, ancestral_Ne=6700
-# (diagnostics/mu_calibrate.py; raw records in out/mu_calibration.jsonl):
-#   branch-mode diversity = 26847 generations  ->  mu = 4.646e-7,  4*Ne*mu = 0.01245.
-#
-# Two things this supersedes:
-#  - The old 5e-6 was calibrated against the pre-2026-07-28 per-SNP pi target, which was ~11.5x
-#    too high (5.1). It is ~10.8x too large and was the sole cause of the "pi and Fst pull in
-#    opposite directions" blocker (6.2) -- with mu calibrated, both fitted losses improve
-#    together with POPMULT.
-#  - 4*Ne*mu is deliberately NOT 0.0122. Forward-phase coalescence holds branch_div below
-#    4*Ne_anc, so mu must sit ~2% above pi/(4*Ne) to land on the observed level. That gap is
-#    POPMULT-dependent, which is why this is calibrated at a stated POPMULT rather than derived.
-#
-# Holding mu fixed at this value across the prior U(2000, 12000) drifts simulated pi by only
-# -3.2% (at POPMULT=2000) to +2.1% (at 12000), because branch_div saturates against its ceiling
-# 2*(324 + 2*Ne_anc) = 27448. That residual drift is signal, not error: it is how the pi LEVEL
-# carries information about POPMULT once mu is no longer free.
+# NOT a biological mutation rate. Half of a calibration constant -- only theta = 4*Ne_anc*mu is
+# meaningful, so report theta, never mu. Calibrated at POPMULT=5000 (CLAUDE.md 6.1.1).
 DEFAULT_MUTATION_RATE = 4.646e-7
-# recombination_rate is FIXED (not inferred): no signal in pi/dxy/Fst, only in LD (CLAUDE.md 5.4).
+# Fixed, not inferred: no signal outside LD (CLAUDE.md 6.3).
 DEFAULT_RECOMBINATION_RATE = 2.75e-6
 
-# POPMULT cap: total N ~ 3.33*POPMULT, so 25000 -> ~83k individuals.
-#
-# RAISED 12000 -> 25000 on 2026-08-26, forced by the 6.7 Fst estimator fix. Correcting the
-# simulated side from Nei to Hudson roughly DOUBLED simulated Fst, which moved the POPMULT the
-# data asks for from ~6,200 to ~12,469 -- i.e. onto the old ceiling. Per year: 2015 -> 8,769,
-# 2023 -> 11,474, 2019 -> 25,229. Left at 12000 the posterior would have piled up against the
-# prior edge and N would have come out TRUNCATED, not inferred, with nothing in the output
-# saying so.
-#
-# Sized against 3.1's measured scaling, on 64 GB CHTC machines (Sohan, 2026-08-26):
-#   analysis peak ~ POPMULT^1.097 (SUPERlinear) -> ~44 GB at 25000, 68% of 64 GB.
-#   analysis time ~ POPMULT^0.809 (sublinear)   -> ~1.8 h, plus ~8 min of SLiM = ~1.9 h/trial.
-#   .trees ~ linear -> ~1.1 GB.
-# SLiM's peak (~8 GB) does NOT overlap the analysis peak -- SLiM exits first -- so request_memory
-# is set by the analysis phase alone. The memory exponent is fitted on only TWO points (500 and
-# 5000) and 25000 is a 5x extrapolation past the largest run that ever completed, so treat 44 GB
-# as an estimate: at exponent +0.10 it is 51 GB, still inside 64. VALIDATE WITH ONE TRIAL AT THE
-# CEILING BEFORE THE PASS -- an undersized request holds jobs mid-pass, and rejection ABC pools
-# whatever survived, biasing the posterior toward the small draws that finished (3.1).
-#
-# On the prior itself: total N ~83k now exceeds BOTH Cohen et al. 2022 estimates (N_WI = 15,000,
-# N_NY = 40,000). That is deliberate and defensible -- 6.1 shows those figures fail their own
-# paper's internal Watterson check by ~52x, and every bias the authors name (low-coverage
-# singleton loss, dadi-vs-Stairway disagreement) pushes them UP. Widening is not free: it is
-# 2.3x the prior volume, so a fixed trial budget puts 2.3x fewer draws near the mode.
+# Total N ~ 3.33*POPMULT. Raised 12000 -> 25000 on 2026-08-26 (CLAUDE.md 6.7).
+# ~44 GB and ~1.9 h per trial at the ceiling -- size CHTC requests from CLAUDE.md 3.1.
 POPMULT_MAX = 25000
 
-# Define prior distributions using scipy.stats.
-# recombination_rate is intentionally ABSENT -- fixed at DEFAULT_RECOMBINATION_RATE (5.4).
+# recombination_rate is intentionally absent -- fixed at DEFAULT_RECOMBINATION_RATE.
 prior_distributions = {
-    "m": stats.lognorm(s=1.5, scale=np.exp(np.log(0.0001))),  # dispersal-kernel decay (scale), NOT amount
-    "total_migration": stats.uniform(loc=0.001, scale=0.3),   # total immigration fraction, U(0.001, 0.301)
-    "pop": stats.uniform(loc=2000, scale=POPMULT_MAX - 2000),  # POPMULT in [2000, 25000] ~ [6.7k, 83k] individuals
-    "numClusters": stats.randint(1, 4),  # randint(1, 4) gives 1, 2, or 3
-    # mu stays a free NUISANCE parameter, but with a tight prior. lognorm(s=...) is multiplicative
-    # about its median, so s IS the fractional spread: the old s=0.5 gave a single draw a ~+-65%
-    # swing in pi. That swamped both the observed between-site spread (1.4-2.1% in log units, once
-    # the 7.2 isolate sites that dominate it are excluded) and the -3.2%/+2.1% pi drift that
-    # carries POPMULT information -- pi_loss would have ranked draws mostly on the mu draw.
-    # s is sized to the calibration's OWN uncertainty: ~1% Monte-Carlo (the mu iterates in
-    # out/mu_calibration.jsonl spread 0.44-0.99%) plus the ~3% POPMULT coupling across the prior.
-    #
-    # TIGHTENED 0.05 -> 0.02 on 2026-08-12, measured (diagnostics/pi_covary.py, 7.2.1). This
-    # function applies NO level re-fit, so a mu draw shifts every simulated log pi bodily and
-    # lands in pi_loss directly. Median pi_loss injected by the mu prior alone, against a
-    # POPMULT-driven signal range of 0.0459 over POPMULT 500->5000:
-    #     s=0.05 -> 0.0401 (90th pct 0.0845)   as large as the ENTIRE POPMULT range: mu would
-    #                                          dominate the ranking
-    #     s=0.02 -> 0.0243 (90th pct 0.0382)
-    #     s=0.01 -> 0.0220 (90th pct 0.0263)
-    # against a flat-simulation floor of 0.0209. 0.02 keeps the injection well inside the signal
-    # while still covering the calibration's real uncertainty; 0.01 would be tighter than the
-    # ~3% POPMULT coupling the prior is there to absorb, i.e. overconfident.
-    # DELIBERATELY NOT covered here: the callable-sites denominator is provisional and biases the
-    # pi target by order 10-20% (5.1). That is a SYSTEMATIC offset shared by every site and every
-    # year, not a per-trial random quantity, so it belongs in a sensitivity re-calibration --
-    # widening this prior to absorb it would only inject noise into the distance.
-    "mutation_rate": stats.lognorm(s=0.02, scale=DEFAULT_MUTATION_RATE),  # report theta=4*Ne*mu, never mu
+    "m": stats.lognorm(s=1.5, scale=np.exp(np.log(0.0001))),   # kernel decay; unidentifiable (7.1)
+    "total_migration": stats.uniform(loc=0.001, scale=0.3),     # U(0.001, 0.301)
+    "pop": stats.uniform(loc=2000, scale=POPMULT_MAX - 2000),   # POPMULT ~ U(2000, 25000)
+    "numClusters": stats.randint(1, 4),                         # 1, 2 or 3; scaled x33 in model()
+    # Nuisance parameter. s is the fractional spread, tightened 0.5 -> 0.05 -> 0.02: anything
+    # wider lets the mu draw rather than POPMULT dominate pi_loss (CLAUDE.md 7.2.1).
+    "mutation_rate": stats.lognorm(s=0.02, scale=DEFAULT_MUTATION_RATE),
 }
 
-# --- Fitted-statistic configuration (CLAUDE.md 7) --------------------------------------------
-# Subpops sampled too thinly for a usable pairwise Fst are dropped from the FITTED statistics.
-# At n<=3 diploids, 46.7% of 2015's pairs return a NEGATIVE Fst (vs 5.3% at 4<=n<=7 and 0% at
-# n>=8): those entries scatter around a noise floor rather than measuring differentiation.
-# Only 2015 has any subpop this small. Set False to fit every subpop.
+# Subpops too thinly sampled for a usable pairwise Fst are dropped from the FITTED statistics --
+# at n<=3, 46.7% of 2015's pairs return a negative Fst. Only 2015 is affected (CLAUDE.md 7.0).
 EXCLUDE_SMALL_SUBPOPS = True
 MIN_SUBPOP_N = 4
 
 
 # ---------------------------------------------------------------------------
-# Feature I/O + helpers (ABC_REFACTOR_PLAN.md 2c)
+# Feature I/O + helpers
 # ---------------------------------------------------------------------------
 
 def _read_vector(path):
@@ -155,7 +82,7 @@ def get_site_geo_distances(year):
     '''Pairwise REAL-SITE geographic distances (metres) for a year's subpops, indexed by
     subpop = specifier-matrix row order -- the same ordering as the pi/Fst/relatedness matrices
     (see GenerateClusterData.assign_genomes_to_clusters_idv_year). Used for BOTH the observed and
-    simulated IBD slopes (plan 3.1). Real-site coords are cols 1 (lat), 2 (lon) of the specifier.
+    simulated IBD slopes. Real-site coords are cols 1 (lat), 2 (lon) of the specifier.
     Cached (the specifier files are fixed).'''
     if year in _GEO_DIST_CACHE:
         return _GEO_DIST_CACHE[year]
@@ -207,7 +134,7 @@ def _offdiag_mean_abs_diff(A, B):
 
 def _pi_log_mean_abs_diff(pi_sim, pi_obs):
     '''Mean absolute difference of log(pi), element-wise (count-normalized); non-finite/non-positive
-    entries skipped. Log-space per plan 1.3 (relative error; linearises the theta=4Nmu ridge).'''
+    entries skipped. Log-space gives relative error and linearises the theta=4Nmu ridge.'''
     pi_sim = np.asarray(pi_sim, dtype=float)
     pi_obs = np.asarray(pi_obs, dtype=float)
     mask = np.isfinite(pi_sim) & np.isfinite(pi_obs) & (pi_sim > 0) & (pi_obs > 0)
@@ -295,11 +222,9 @@ def calculate_losses(x, x0):
     '''
     Per-statistic distances between observed (x) and simulated (x0) feature sets.
 
-    Each statistic is aggregated within a year by the MEAN over its entries (count-normalized,
-    so the 24/17/20-subpop years contribute comparably -- plan 1.5) and then averaged across
-    years. pi is compared in LOG space (plan 1.3). There is deliberately NO total_loss: per-plan
-    6 the standardization (sigma = 1.4826*MAD from the run set) and the combined distance are
-    computed OFFLINE, after the pass (ABC_REFACTOR_PLAN.md 4).
+    Each statistic is averaged over its entries within a year (so the 24/17/20-subpop years
+    contribute comparably), then across years. pi is compared in LOG space. There is deliberately
+    NO total_loss -- abc_standardize.py builds the combined distance offline (CLAUDE.md 7).
 
     Returns (all un-standardized):
       - pi_loss     : FITTED  (log-space, element-wise)
@@ -308,12 +233,8 @@ def calculate_losses(x, x0):
       - dxy_loss    : DIAGNOSTIC only (off-diagonal)
       - genrel_loss : DIAGNOSTIC only (off-diagonal)
 
-    IBD was demoted from fitted to diagnostic: the OBSERVED slope is indistinguishable from zero
-    in all three years (Mantel test, 9999 permutations of site labels: p = 0.64 / 0.15 / 0.99;
-    Mantel r = -0.069 / +0.214 / +0.004, sign flipping across years). Fitting a target that is
-    noise adds a pure-noise term to the standardized D -- costing acceptance efficiency and
-    blurring the identifiable parameters -- and would give `scale` a posterior that is only its
-    prior reshaped. Still computed, as a posterior-predictive check.
+    IBD is diagnostic, not fitted: the observed slope is indistinguishable from zero in all three
+    years (CLAUDE.md 7.1).
     '''
     pi_terms, fst_terms, ibd_terms, dxy_terms, genrel_terms = [], [], [], [], []
 
@@ -337,10 +258,8 @@ def calculate_losses(x, x0):
         dxy_terms.append(_offdiag_mean_abs_diff(x[f"{year}_divergence"][kk],
                                                 x0[f"{year}_divergence"][kk]))
 
-        # genetic relatedness (diagnostic, off-diagonal) -- deliberately NOT masked. The matrix is
-        # centred on the populations present when it was computed, so slicing rows/cols out of it
-        # is NOT the same as recomputing on the subset (CLAUDE.md 8.2). Masking here would
-        # silently change what the numbers mean; both sides stay full-size instead.
+        # Deliberately NOT masked: relatedness is centred on the populations present when it was
+        # computed, so slicing it is not the same as recomputing on the subset (CLAUDE.md 8#2).
         genrel_terms.append(_offdiag_mean_abs_diff(x[f"{year}_relatedness"],
                                                    x0[f"{year}_relatedness"]))
 
@@ -413,7 +332,7 @@ def read_parameters_from_csv(csv_path):
                     parameters = {
                         "m": float(row["m"]),
                         # total_migration is optional; default 0.05 so legacy CSVs without the
-                        # column still run (plan 2c-iv).
+                        # column still run.
                         "total_migration": float(row["total_migration"]) if row.get("total_migration") not in (None, "") else 0.05,
                         "pop": int(float(row["pop"])),  # Convert to float first to handle scientific notation
                         "numClusters": int(float(row["numClusters"])),
@@ -455,12 +374,8 @@ def run_sims_from_csv(input_csv, output_csv="../out/abc_results.csv", simToRun=-
     observed_data = getObservedData()
     
     # Determine if we need to write the header.
-    # An exists() check alone is not enough: CHTC's run_code.sh pre-creates
-    # out/abc_results.csv (so an evicted job fails with a real exit code instead
-    # of an errno-2 transfer hold), which made every job see a non-empty path,
-    # skip the header, and emit data rows with no column names. Treat a
-    # zero-byte file as needing one; a file with rows already in it does not,
-    # so appending across iterations still works.
+    # CHTC's run_code.sh pre-creates this file, so exists() alone would skip the header.
+    # Treat a zero-byte file as needing one.
     needs_header = not (Path(output_csv).exists() and Path(output_csv).stat().st_size > 0)
     
     # Create detailed results directory
@@ -470,8 +385,8 @@ def run_sims_from_csv(input_csv, output_csv="../out/abc_results.csv", simToRun=-
     print(f"Detailed results will be saved to: {detailed_results_dir}")
     
     # Define CSV columns
-    # No per-year columns and no total_loss: the combined standardized distance is built offline
-    # (plan 4/6). pi/fst are FITTED; ibd/dxy/genrel are DIAGNOSTIC.
+    # No total_loss: the combined standardized distance is built offline by abc_standardize.py.
+    # pi/fst are FITTED; ibd/dxy/genrel are DIAGNOSTIC.
     fieldnames = ["iteration", "m", "total_migration", "pop", "numClusters", "mutation_rate", "recombination_rate",
                   "pi_loss", "fst_loss", "ibd_loss", "dxy_loss", "genrel_loss"]
     
@@ -506,8 +421,7 @@ def run_sims_from_csv(input_csv, output_csv="../out/abc_results.csv", simToRun=-
                 iteration_dir = detailed_results_dir / f"run{iteration + 1}"
                 iteration_dir.mkdir(parents=True, exist_ok=True)
                 
-                # Detail artifact = raw-feature store for offline standardization (plan 2c-v/4).
-                # Copy every raw feature file so post-hoc MAD/sigma has raw values, not just losses.
+                # Keep raw features so offline sigma has values, not just losses.
                 for year in ["2015", "2019", "2023"]:
                     for stat in ["diversities", "divergences", "fst", "relatedness"]:
                         src = Path(f"../data/Output_Data/{stat}_{year}.csv")
@@ -560,22 +474,17 @@ def run_abc_simulation(num_iterations, output_csv="../out/abc_results.csv"):
     observed_data = getObservedData()
 
     # Determine if we need to write the header.
-    # An exists() check alone is not enough: CHTC's run_code.sh pre-creates
-    # out/abc_results.csv (so an evicted job fails with a real exit code instead
-    # of an errno-2 transfer hold), which made every job see a non-empty path,
-    # skip the header, and emit data rows with no column names. Treat a
-    # zero-byte file as needing one; a file with rows already in it does not,
-    # so appending across iterations still works.
+    # CHTC's run_code.sh pre-creates this file, so exists() alone would skip the header.
+    # Treat a zero-byte file as needing one.
     needs_header = not (Path(output_csv).exists() and Path(output_csv).stat().st_size > 0)
 
-    # Detail artifact dir (raw-feature store for offline standardization; also transferred back
-    # from CHTC per the submit file).
+    # Raw-feature store for offline standardization; transferred back from CHTC.
     detailed_results_dir = Path(output_csv).parent / "detailed_sim_results"
     detailed_results_dir.mkdir(parents=True, exist_ok=True)
 
     # Define CSV columns
-    # No per-year columns and no total_loss: the combined standardized distance is built offline
-    # (plan 4/6). pi/fst are FITTED; ibd/dxy/genrel are DIAGNOSTIC.
+    # No total_loss: the combined standardized distance is built offline by abc_standardize.py.
+    # pi/fst are FITTED; ibd/dxy/genrel are DIAGNOSTIC.
     fieldnames = ["iteration", "m", "total_migration", "pop", "numClusters", "mutation_rate", "recombination_rate",
                   "pi_loss", "fst_loss", "ibd_loss", "dxy_loss", "genrel_loss"]
 
@@ -604,7 +513,7 @@ def run_abc_simulation(num_iterations, output_csv="../out/abc_results.csv"):
                 # Calculate losses
                 losses = calculate_losses(observed_data, simulated_data)
 
-                # Copy raw feature files for this trial into the detail artifact (plan 2c-v/4).
+                # Keep this trial's raw features for offline standardization.
                 iteration_dir = detailed_results_dir / f"run{iteration + 1}"
                 iteration_dir.mkdir(parents=True, exist_ok=True)
                 for year in ["2015", "2019", "2023"]:
@@ -644,20 +553,11 @@ def run_abc_simulation(num_iterations, output_csv="../out/abc_results.csv"):
 
 
 if __name__ == "__main__":
-    # CHTC usage:  python ABCAnalysisNoRedis.py <job_id> [num_trials]
-    #   <job_id>     integer identifying this job (e.g. HTCondor $(Process)). It seeds the RNG so
-    #                the prior draws are reproducible AND distinct across jobs, and it names the
-    #                per-job output file. Give every job a different id.
-    #   [num_trials] how many parameter sets to sample from the prior and run (default 100).
-    #
-    # Each job samples <num_trials> draws from the prior, runs the full pipeline for each, and
-    # writes one row per trial to ../out/abc_results.csv (params + per-stat losses, no total_loss),
-    # plus per-trial raw features under ../out/detailed_sim_results/. The CHTC submit file transfers
-    # both and remaps them per-process (abc_results_<Process>.csv, detailed_sim_results_<Process>).
-    # After all jobs finish: concatenate the per-job CSVs and run abc_standardize.py to compute
-    # sigma and the combined standardized distance D. See ABC_REFACTOR_PLAN.md §4/§6.
-    #
-    # (The old CSV-driven path is still available programmatically via run_sims_from_csv().)
+    # Usage: python ABCAnalysisNoRedis.py <job_id> [num_trials]
+    # job_id seeds the RNG and must be DISTINCT per job -- repeats re-draw identical parameters.
+    # Writes one row per trial to ../out/abc_results.csv plus raw features under
+    # ../out/detailed_sim_results/. Afterwards, concatenate the per-job CSVs and run
+    # abc_standardize.py. (run_sims_from_csv() is the older CSV-driven path.)
     if len(sys.argv) < 2:
         print("Usage: python ABCAnalysisNoRedis.py <job_id> [num_trials]")
         sys.exit(1)
@@ -665,13 +565,11 @@ if __name__ == "__main__":
     job_id = int(sys.argv[1])
     num_trials = int(sys.argv[2]) if len(sys.argv) > 2 else 100
 
-    # scipy's <dist>.rvs() draws from numpy's global RNG; seeding it per job makes each job's
-    # trials reproducible and (via distinct job_ids) non-overlapping. KMeans stays deterministic
-    # regardless (it uses the fixed Main.KMEANS_SEED, not the global RNG).
+    # scipy .rvs() draws from numpy's global RNG, so this makes each job's trials reproducible
+    # and distinct. KMeans is unaffected -- it uses the fixed Main.KMEANS_SEED.
     np.random.seed(job_id)
 
-    # Fixed filename on purpose: the submit file remaps out/abc_results.csv per-process, so
-    # distinct job_ids don't need distinct filenames here (job_id still seeds the draws above).
+    # Fixed filename: the submit file remaps it per-process.
     output_csv = "../out/abc_results.csv"
     print(f"Job {job_id}: sampling {num_trials} prior-drawn trials -> {output_csv}")
     run_abc_simulation(num_trials, output_csv=output_csv)

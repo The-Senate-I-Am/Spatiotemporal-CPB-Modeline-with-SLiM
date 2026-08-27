@@ -1,26 +1,18 @@
 """
-Offline standardization + ranking for the rejection-ABC pass (ABC_REFACTOR_PLAN.md §4).
+Offline standardization + ranking for the rejection-ABC pass (CLAUDE.md 7).
 
 Runs AFTER the big pass, on the accumulated results CSV. It does NOT run any simulations.
 
-Why offline: during the pass we deliberately store only per-statistic, un-standardized losses
-(no total_loss), because a defensible scale (sigma) can only be measured once we have the spread
-of losses across the whole run set -- the run set is its own pilot batch. This script:
+Offline because sigma can only be measured from the spread of losses across the whole run set,
+which is its own pilot batch. This script:
 
-  1. reads the results CSV (per-run pi_loss / fst_loss / ibd_loss + diagnostics),
-  2. computes a robust scale sigma_j = 1.4826 * MAD for each FITTED statistic,
-  3. combines them into one standardized distance D per run (equal weights, plan 1/6),
+  1. reads the results CSV,
+  2. computes sigma_j = 1.4826 * MAD for each FITTED statistic,
+  3. combines them into one standardized distance D per run,
   4. writes a ranked CSV and freezes the sigmas to a JSON file.
 
-Default sigma granularity: per-statistic, computed from the loss columns (plan §3.2 default).
-The detailed_sim_results/ raw-feature store enables a finer per-entry sigma later if wanted.
-
 FITTED (enter D):      pi_loss (log-space), fst_loss
-DIAGNOSTIC (not in D): ibd_loss, dxy_loss, genrel_loss   -- kept for posterior-predictive checks.
-
-ibd_loss was demoted from fitted: the observed IBD slope is indistinguishable from zero in all
-three years (Mantel, 9999 perms: p = 0.64 / 0.15 / 0.99), so it contributed noise to D rather
-than signal. See CLAUDE.md 7.
+DIAGNOSTIC (not in D): ibd_loss, dxy_loss, genrel_loss   -- posterior-predictive checks only.
 """
 import json
 import numpy as np

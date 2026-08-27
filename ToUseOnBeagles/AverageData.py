@@ -102,27 +102,12 @@ def read_specifier(year):
     return siteNames, sampleCounts
 
 
-# COMPARISON DENOMINATOR.
+# COMPARISON DENOMINATOR -- computed analytically, NOT read from pixy.
 #
-# pixy reports count_comparisons, but that field cannot represent a value past
-# INT32_MAX, and (comparisons per site) * no_sites crosses it at 14 diploid
-# individuals on the largest chromosome (~6.5e6 SNPs). Observed on this dataset,
-# the field saturates to INT32_MIN (-2147483648) -- the "integer indefinite"
-# value an x86 double-to-int32 cast yields when the double is out of range --
-# rather than wrapping modularly.
-#
-# H53-2015 (19 individuals, 703 comparisons per site) saturates on 15 of 17
-# chromosomes, which drove its denominator negative and produced a NEGATIVE pi.
-# Rows that saturate on only SOME chromosomes are the more dangerous case: they
-# stay positive and are merely inflated by whatever fraction of the denominator
-# was lost. Alsum25-2015 x {Refuge,H15} saturate on 1 of 17 and came out ~18%
-# high -- large enough to matter, small enough to look like real data.
-#
-# The count does not need to be read at all. count_missing is 0 on every row
-# (Beagle imputes everything), so comparisons per site is a constant fixed by
-# sample size alone, and the genome-wide denominator is that constant times the
-# callable-site count. count_diffs is unaffected -- it peaks around 4e7 per
-# chromosome, three orders of magnitude below the overflow point.
+# pixy's count_comparisons overflows int32 at >=14 diploid individuals and saturates to
+# INT32_MIN, which silently corrupted 2015 (CLAUDE.md 6.5). It isn't needed: count_missing is 0
+# on every row, so comparisons per site is fixed by sample size alone and the genome-wide
+# denominator is that constant times the callable-site count. count_diffs is unaffected.
 
 def comparisons_per_site_pi(nIndividuals):
     """Pairwise comparisons at a single site within one population: C(2n, 2)."""
