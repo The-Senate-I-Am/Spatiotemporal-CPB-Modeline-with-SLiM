@@ -150,6 +150,17 @@ changed the project:
 - **Population size is identifiable through F_st, not through π.** A POPMULT sweep tracks
   `1/(1+4Nm)` almost exactly and improves the F_st distance 8.7×, even though π depends on N and μ
   only through the confounded product θ = 4Nμ.
+- **The two sides were computing different F_st estimators, and it was worth a factor of ~2.**
+  tskit's `Fst` implements Nei (1973)/Slatkin (1991), `(d_xy − H_w)/(d_xy + H_w)`, which is about
+  *half* of Hudson's `(d_xy − H_w)/d_xy` at low differentiation — while the empirical target came
+  from pixy's Weir–Cockerham. On a known-truth two-deme coalescent model, Weir–Cockerham and
+  Hudson agree to 1–5% while Nei sits at 0.50× Hudson, so the simulated side had been reporting
+  half the statistic it was being fitted against. The gap was 78% of the across-prior range of the
+  F_st distance and 47× its run-to-run noise floor, and it biased the inferred population size
+  down about twofold. The simulator now computes Hudson from π and d_xy — both already in hand,
+  so the fix removes a tree traversal rather than adding one. Both estimators produce ordinary
+  small F_st values, which is why this was invisible in the output: *"F_st" names a family, not a
+  statistic.*
 - **The diversity scale was ~10.8× off, and it was manufacturing a false conflict.** Recalibrating
   μ against the corrected π target (5e-6 → 4.646e-7, measured at three population sizes) dissolved
   a standing blocker: population size and differentiation had appeared to demand incompatible
@@ -171,9 +182,23 @@ at three population sizes). That removed the standing blocker: the population si
 no longer drives π away from target — both fitted statistics now improve together, so the earlier
 conflict was an artifact of the miscalibrated scale rather than a feature of the data.
 
-Remaining before the full pass: confirm that simulated and observed π covary site-by-site (if they
-do not, π's preference for large population sizes is partly spurious), measure the noise floor
-across replicates, and size the cluster jobs for the top of the prior.
+Both of the questions that stood here previously have since been answered. Simulated and observed
+π do **not** covary site-by-site — a structureless simulation scores as well as the best one
+tested — so π is treated as a one-sided lower bound on population size rather than a second vote,
+and F_st carries the inference. The replicate noise floor was then measured at that operating
+point and the F_st distance cleared it by roughly 60×.
+
+The population-size prior has since been widened to match: the corrected estimator asks for a
+value that sat exactly on the old ceiling, which would have truncated the posterior rather than
+inferred it, so the ceiling was raised to roughly twice its previous value. The diversity
+calibration did not need redoing — ancestral coalescence puts diversity within half a percent of
+a hard ceiling, so one fixed value still covers the wider prior to within about ±3%.
+
+Remaining before the full pass: re-measure the replicate noise floor on the corrected F_st
+estimator (the existing figure is on the superseded one), and confirm the memory projection at
+the new prior ceiling with a single trial — the estimate extrapolates well past the largest run
+that has completed, and an undersized cluster request would bias the posterior toward whichever
+draws happened to finish.
 
 Design decisions, verified measurements, known defects, and remaining work are tracked in a
 separate working log that is not part of this repository.

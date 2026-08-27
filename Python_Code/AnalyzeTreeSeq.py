@@ -36,18 +36,34 @@ def calculate_diversity_and_divergence(ts, genome_indicies, time, output_diversi
     #Diversity (pi) per subpop -- all sample sets in a single traversal.
     diversities = np.asarray(ts.diversity(pop_samples), dtype=float)
 
-    #Divergence (d_xy) and Fst -- ALL pairs in one traversal each via indexes= (verified
-    #bit-identical to per-pair calls, and ~orders of magnitude faster). Diagonal stays 0.
-    #Fst is relative differentiation (~mu-invariant); computed jointly here is fine -- the
-    #centring footgun is relatedness-specific (CLAUDE.md 7#2), not an Fst/divergence concern.
+    #Divergence (d_xy) -- ALL pairs in one traversal via indexes= (verified bit-identical to
+    #per-pair calls, and ~orders of magnitude faster). Diagonal stays 0.
+    #
+    #Fst is HUDSON, computed here from pi and d_xy rather than by ts.Fst (CLAUDE.md 6.7):
+    #
+    #    Fst_Hudson = 1 - Hw / d_xy,      Hw = (pi_X + pi_Y)/2
+    #
+    #ts.Fst is DELIBERATELY NOT USED. It implements Nei (1973) / Slatkin (1991),
+    #    Fst_Nei = 1 - 2(pi_X + pi_Y)/(pi_X + 2 d_xy + pi_Y) = (d_xy - Hw)/(d_xy + Hw),
+    #which is a DIFFERENT quantity -- about HALF of Hudson at low differentiation, since
+    #Hudson = (d_xy - Hw)/d_xy and the two denominators differ by the factor (1 + Hw/d_xy) ~ 2.
+    #The empirical target is pixy's Weir-Cockerham (ToUseOnBeagles/AverageData.py), and WC and
+    #Hudson estimate the SAME parameter -- measured agreeing to 1-5% on a known-truth msprime
+    #2-deme model, against Nei/Hudson = 0.5027 on the same data. Fitting Nei against WC compared
+    #two different statistics and cost a factor of ~2 in the inferred POPMULT (6.7).
+    #
+    #Free: pi and d_xy are already in hand, so this drops the ts.Fst traversal rather than
+    #adding one. Fst is relative differentiation (~mu-invariant); computing it jointly here is
+    #fine -- the centring footgun is relatedness-specific (CLAUDE.md 8#2), not an Fst concern.
     divergences = np.zeros((K, K))
     fsts = np.zeros((K, K))
     if pairs:
         div_flat = ts.divergence(pop_samples, indexes=pairs)
-        fst_flat = ts.Fst(pop_samples, indexes=pairs)
-        for (i, j), dv, fv in zip(pairs, div_flat, fst_flat):
+        for (i, j), dv in zip(pairs, div_flat):
             divergences[i, j] = dv
-            fsts[i, j] = fv
+            # dv == 0 only for a degenerate pair (no variation at all); leave Fst at 0 rather
+            # than emitting a NaN/inf that would silently poison fst_loss downstream.
+            fsts[i, j] = 0.0 if dv == 0 else 1.0 - 0.5 * (diversities[i] + diversities[j]) / dv
 
     #Genetic relatedness, centred across THIS year's subpops by passing all sample sets to a
     #single call (matches empirical per-year centring; never slice a larger matrix --

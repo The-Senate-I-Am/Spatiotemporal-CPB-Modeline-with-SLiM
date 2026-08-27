@@ -41,15 +41,39 @@ DEFAULT_MUTATION_RATE = 4.646e-7
 # recombination_rate is FIXED (not inferred): no signal in pi/dxy/Fst, only in LD (CLAUDE.md 5.4).
 DEFAULT_RECOMBINATION_RATE = 2.75e-6
 
-# POPMULT cap: total N ~ 3.33*POPMULT, so 12000 -> ~40k individuals (CHTC-feasible; CLAUDE.md 3).
-POPMULT_MAX = 12000
+# POPMULT cap: total N ~ 3.33*POPMULT, so 25000 -> ~83k individuals.
+#
+# RAISED 12000 -> 25000 on 2026-08-26, forced by the 6.7 Fst estimator fix. Correcting the
+# simulated side from Nei to Hudson roughly DOUBLED simulated Fst, which moved the POPMULT the
+# data asks for from ~6,200 to ~12,469 -- i.e. onto the old ceiling. Per year: 2015 -> 8,769,
+# 2023 -> 11,474, 2019 -> 25,229. Left at 12000 the posterior would have piled up against the
+# prior edge and N would have come out TRUNCATED, not inferred, with nothing in the output
+# saying so.
+#
+# Sized against 3.1's measured scaling, on 64 GB CHTC machines (Sohan, 2026-08-26):
+#   analysis peak ~ POPMULT^1.097 (SUPERlinear) -> ~44 GB at 25000, 68% of 64 GB.
+#   analysis time ~ POPMULT^0.809 (sublinear)   -> ~1.8 h, plus ~8 min of SLiM = ~1.9 h/trial.
+#   .trees ~ linear -> ~1.1 GB.
+# SLiM's peak (~8 GB) does NOT overlap the analysis peak -- SLiM exits first -- so request_memory
+# is set by the analysis phase alone. The memory exponent is fitted on only TWO points (500 and
+# 5000) and 25000 is a 5x extrapolation past the largest run that ever completed, so treat 44 GB
+# as an estimate: at exponent +0.10 it is 51 GB, still inside 64. VALIDATE WITH ONE TRIAL AT THE
+# CEILING BEFORE THE PASS -- an undersized request holds jobs mid-pass, and rejection ABC pools
+# whatever survived, biasing the posterior toward the small draws that finished (3.1).
+#
+# On the prior itself: total N ~83k now exceeds BOTH Cohen et al. 2022 estimates (N_WI = 15,000,
+# N_NY = 40,000). That is deliberate and defensible -- 6.1 shows those figures fail their own
+# paper's internal Watterson check by ~52x, and every bias the authors name (low-coverage
+# singleton loss, dadi-vs-Stairway disagreement) pushes them UP. Widening is not free: it is
+# 2.3x the prior volume, so a fixed trial budget puts 2.3x fewer draws near the mode.
+POPMULT_MAX = 25000
 
 # Define prior distributions using scipy.stats.
 # recombination_rate is intentionally ABSENT -- fixed at DEFAULT_RECOMBINATION_RATE (5.4).
 prior_distributions = {
     "m": stats.lognorm(s=1.5, scale=np.exp(np.log(0.0001))),  # dispersal-kernel decay (scale), NOT amount
     "total_migration": stats.uniform(loc=0.001, scale=0.3),   # total immigration fraction, U(0.001, 0.301)
-    "pop": stats.uniform(loc=2000, scale=POPMULT_MAX - 2000),  # POPMULT in [2000, 12000] ~ [6.7k, 40k] individuals
+    "pop": stats.uniform(loc=2000, scale=POPMULT_MAX - 2000),  # POPMULT in [2000, 25000] ~ [6.7k, 83k] individuals
     "numClusters": stats.randint(1, 4),  # randint(1, 4) gives 1, 2, or 3
     # mu stays a free NUISANCE parameter, but with a tight prior. lognorm(s=...) is multiplicative
     # about its median, so s IS the fractional spread: the old s=0.5 gave a single draw a ~+-65%
