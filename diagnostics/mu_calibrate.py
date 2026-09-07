@@ -299,8 +299,9 @@ def main(a):
         k = len(ss[y])
         pairs = [(i, j) for i in range(k) for j in range(k) if i != j]
         F = np.zeros((k, k))
-        for (i, j), v in zip(pairs, np.asarray(tsm.Fst(ss[y], indexes=pairs)).ravel()):
-            F[i, j] = v
+        # Hudson, matching AnalyzeTreeSeq.py -- NOT ts.Fst (CLAUDE.md 6.7, invariant 9).
+        for (i, j), dv in zip(pairs, np.asarray(tsm.divergence(ss[y], indexes=pairs)).ravel()):
+            F[i, j] = 0.0 if dv == 0 else 1.0 - 0.5 * (pis[y][i] + pis[y][j]) / dv
         O = ABC._read_matrix(Path(f"../data/empiricalStats/averaged_fst_{y}.csv"))[
             np.ix_(keep[y], keep[y])]
         m = ~np.eye(k, dtype=bool)

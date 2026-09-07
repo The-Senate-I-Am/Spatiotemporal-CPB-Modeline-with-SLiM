@@ -3,6 +3,8 @@
 Reports BRANCH-mode diversity (= 2*E[T_pair] in generations, independent of mu) alongside
 site-mode pi. Since mutations are overlaid post-hoc, site_pi = mu * branch_div exactly, so
 branch_div isolates what the DEMOGRAPHY is doing with no mutation-rate confound.
+
+Fst is Hudson, matching production (CLAUDE.md 6.7).
 """
 import argparse, json
 from pathlib import Path
@@ -71,10 +73,14 @@ for y in ["2015", "2019", "2023"]:
     branch = np.array([ts.diversity([s], mode="branch")[0] for s in ss])
     site = np.array([ts_mut.diversity([s], mode="site")[0] for s in ss])
     k = len(ss)
+    # Hudson, matching AnalyzeTreeSeq.py. NOT ts.Fst -- that is Nei/Slatkin, ~half of Hudson
+    # (CLAUDE.md 6.7, invariant 9).
+    pairs = [(i, j) for i in range(k) for j in range(i + 1, k)]
     F = []
-    for i in range(k):
-        for j in range(i + 1, k):
-            F.append(float(np.asarray(ts_mut.Fst([ss[i], ss[j]])).ravel()[0]))
+    if pairs:
+        dxy = np.asarray(ts_mut.divergence(ss, indexes=pairs)).ravel()
+        for (i, j), dv in zip(pairs, dxy):
+            F.append(0.0 if dv == 0 else 1.0 - 0.5 * (site[i] + site[j]) / dv)
     res[y] = {
         "n_subpops": k,
         "branch_div_mean": float(branch.mean()),  # 2*E[T_pair], generations; = pi/mu

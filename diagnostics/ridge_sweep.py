@@ -138,7 +138,10 @@ def run_point(anc_ne, mu, recomb, seed, outfile, popmult):
         site = np.array(ts_mut.diversity(ss, mode="site"))
         k = len(ss)
         pairs = [(i, j) for i in range(k) for j in range(i + 1, k)]
-        F = np.asarray(ts_mut.Fst(ss, indexes=pairs)).ravel()
+        # Hudson, matching AnalyzeTreeSeq.py -- NOT ts.Fst (CLAUDE.md 6.7, invariant 9).
+        dxy = np.asarray(ts_mut.divergence(ss, indexes=pairs)).ravel()
+        F = np.array([0.0 if d == 0 else 1.0 - 0.5 * (site[i] + site[j]) / d
+                      for (i, j), d in zip(pairs, dxy)])
         rec[y] = {
             "n_subpops": k,
             "branch_div_mean": float(branch.mean()),

@@ -79,17 +79,18 @@ runtime.
 | `Python_Code/AnalyzeTreeSeq.py` | Recapitation, simplification, mutation overlay, batched tskit statistics |
 | `Python_Code/ABCAnalysisNoRedis.py` | ABC driver, priors, `calculate_losses`, IBD helpers. CHTC entrypoint |
 | `Python_Code/abc_standardize.py` | Offline MAD-standardization of per-statistic distances → ranked `D` |
+| `Python_Code/ld_common.py` | Shared LD-decay binning — imported by **both** the simulated and empirical sides, which run on different machines. Carries a spec hash so the two cannot silently drift apart |
 | `Python_Code/GenerateClusterData.py` | KMeans over field coordinates, distance matrix, genome→deme assignment |
 | `Python_Code/GenerateSimulationParams.py` | Dispersal kernel → per-deme migration rates |
 | `SLiM_Code/CPBSampleSim{Win,Linux}.slim` | The forward simulation (identical apart from path separators) |
 | `ToUseOnBeagles/` | Empirical-statistics pipeline — runs on the machine holding the VCFs, not here |
-| `diagnostics/` | Sweep harnesses for cost/scaling experiments on an existing tree sequence |
+| `diagnostics/` | Sweep harnesses for cost/scaling experiments on an existing tree sequence, plus `collect_batch.py`, which pools a cluster batch and reports what actually drives each distance |
 | `data/` | Field data, specifier matrices, empirical targets, simulation outputs |
 
 ## Getting started
 
 ```bash
-conda env create -f environment3.yml
+conda env create -f environment.yml
 conda activate cpb-env
 
 cd Python_Code
@@ -173,32 +174,67 @@ changed the project:
   biologically defensible value would barely change the inference and cannot be simulated in under
   a year of CPU time, so the constant stays where it is and the *language* around μ changes
   instead — it is half of a calibration constant, not a mutation rate, and only θ = 4Nμ is reported.
+- **The first full pass identified the dispersal kernel and learned nothing about population
+  size.** Rejection ABC over 2,495 trials returned a population-size posterior whose spread is
+  82–102% of the prior's at every acceptance threshold, while the kernel-decay parameter — which
+  the data cannot legitimately constrain, since isolation by distance is statistically absent —
+  collapsed to 5% of its prior width. F_st identifies only the product of size and migration, so
+  with both free the two trade off freely: the twenty best trials agree on F_st to a standard
+  deviation of 0.000033 while spanning nearly the whole size prior. Conditioning on narrow slices
+  of the migration parameters does tighten the estimate, but it also *moves* it 2.5-fold depending
+  on where they are pinned — so what the data supports is the product, and any single population
+  size is a restatement of the dispersal assumption rather than an inference from genetics.
+- **Distance weights are measured, not assumed.** A rank-space variance decomposition across the
+  batch showed the diversity distance is majority *nuisance*: 63% of the variance the parameters
+  explain in it comes from the mutation-rate draw and only 10% from population size, whereas the
+  F_st distance takes essentially none from mutation rate — an empirical confirmation that F_st is
+  denominator-invariant. Weighting on replicate noise alone would have given the two statistics
+  near-equal weight; weighting on demographic signal gives roughly seven to one.
+- **The inherited recombination rate is derived, not measured, and inherits a known error.** The
+  source paper estimated the population-scaled rate ρ directly, then divided by its own
+  effective-size estimate to report a per-base rate — an estimate that fails the same paper's
+  internal consistency check by about fiftyfold. The published value works out to ~275 cM/Mb,
+  which is not a possible recombination rate; corrected, it lands at ~2.8 cM/Mb, an ordinary
+  insect value. Nothing computed so far depends on it, because neither π nor F_st carries any
+  recombination signal — but it is central to the linkage-disequilibrium work now underway.
 
 ## Status
 
-Pre-inference, but no longer blocked on calibration. The pipeline runs end to end, the empirical
-targets are validated, and the diversity scale has been recalibrated (μ: 5e-6 → 4.646e-7, measured
-at three population sizes). That removed the standing blocker: the population size that fits F_st
-no longer drives π away from target — both fitted statistics now improve together, so the earlier
-conflict was an artifact of the miscalibrated scale rather than a feature of the data.
+**The first inference pass has run, and its result is a negative one: population size is not
+identifiable from the current statistics.** 2,495 trials completed cleanly out of 2,500, with
+uniform coverage of the population-size prior and no memory failures at the ceiling. The
+posterior for population size is nonetheless indistinguishable from the prior — its interquartile
+range stays at 82–102% of the prior's at every acceptance threshold down to the strictest 1%.
+Meanwhile the dispersal-kernel decay parameter, which the data cannot legitimately constrain,
+collapsed to 5% of its prior width.
 
-Both of the questions that stood here previously have since been answered. Simulated and observed
-π do **not** covary site-by-site — a structureless simulation scores as well as the best one
-tested — so π is treated as a one-sided lower bound on population size rather than a second vote,
-and F_st carries the inference. The replicate noise floor was then measured at that operating
-point and the F_st distance cleared it by roughly 60×.
+The mechanism is a textbook confound rather than a bug. F_st depends on the *product* of
+population size and migration rate, so with both free the simulation can reproduce the observed
+differentiation from anywhere in the prior by trading one against the other. The clearest
+demonstration: across the twenty best-fitting trials the F_st distance has a standard deviation of
+0.000033 — they are all hitting the same value — while population size ranges over essentially the
+whole prior. Nucleotide diversity cannot break the tie, because the simulation's short forward
+window means most coalescence happens in a fixed-size ancestral phase that population size never
+touches.
 
-The population-size prior has since been widened to match: the corrected estimator asks for a
-value that sat exactly on the old ceiling, which would have truncated the posterior rather than
-inferred it, so the ceiling was raised to roughly twice its previous value. The diversity
-calibration did not need redoing — ancestral coalescence puts diversity within half a percent of
-a hard ceiling, so one fixed value still covers the wider prior to within about ±3%.
+Two things the pass did establish. The distance function's weights are now measured rather than
+assumed: a variance decomposition across the batch showed that the diversity distance is majority
+*mutation-rate nuisance* (63% of its explained variance) rather than demography, so it is
+down-weighted roughly seven-fold relative to F_st. And the widened population-size prior is
+adequate — the fit no longer presses against its ceiling.
 
-Remaining before the full pass: re-measure the replicate noise floor on the corrected F_st
-estimator (the existing figure is on the superseded one), and confirm the memory projection at
-the new prior ceiling with a single trial — the estimate extrapolates well past the largest run
-that has completed, and an undersized cluster request would bias the posterior toward whichever
-draws happened to finish.
+**The current line of work is a linkage-disequilibrium statistic**, which supplies the independent
+equation the confound needs: LD decay depends on population size and recombination rate, with
+migration absent entirely. Both halves are written and verified against coalescent simulation; the
+empirical run that fixes the distance scale is the next step. Its viability turns on where that
+decay actually falls, since resolving very short-range LD would be computationally prohibitive.
+
+An unresolved question surfaced while scoping it. The recombination rate the project inherits is
+not a measured quantity but a derived one — the source paper obtained it by dividing a measured
+population-scaled rate by its own effective-size estimate, and that estimate fails the paper's
+internal consistency check by roughly fiftyfold. Corrected, the implied rate is an ordinary insect
+value rather than one about 275× too high. Nothing computed so far depends on it, since neither
+diversity nor F_st carries recombination signal, but the LD work does.
 
 Design decisions, verified measurements, known defects, and remaining work are tracked in a
 separate working log that is not part of this repository.
@@ -208,7 +244,25 @@ separate working log that is not part of this repository.
 Cohen, Z. P., et al. (2022). Evidence of hard selective sweeps suggests independent adaptation to
 insecticides in Colorado potato beetle (Coleoptera: Chrysomelidae). *Evolutionary Applications*
 **15**:1691–1705. [doi:10.1111/eva.13498](https://doi.org/10.1111/eva.13498) — the source of the
-ancestral effective size, recombination rate, and simulation run length used here.
+ancestral effective size, recombination rate, and simulation run length used here. Note that both
+the effective size and the recombination rate are used with reservations documented above: the
+former fails the paper's own internal consistency check, and the latter is derived from it.
+
+Boitard, S., Rodríguez, W., Jay, F., Mona, S., & Austerlitz, F. (2016). Inferring population size
+history from large samples of genome-wide molecular data — an approximate Bayesian computation
+approach. *PLoS Genetics* **12**(3):e1005877.
+[doi:10.1371/journal.pgen.1005877](https://doi.org/10.1371/journal.pgen.1005877) — the
+methodological basis for the linkage-disequilibrium statistic: average LD in bins of physical
+distance, used as an ABC summary statistic.
+
+Hayes, B. J., Visscher, P. M., McPartlan, H. C., & Goddard, M. E. (2003). Novel multilocus measure
+of linkage disequilibrium to estimate past effective population size. *Genome Research*
+**13**:635–643. — LD at different distances reflects effective size at different times in the
+past, which is why LD is expected to see the recent window that nucleotide diversity cannot.
+
+Hill, W. G. (1981). Estimation of effective population size from data on linkage disequilibrium.
+*Genetical Research* **38**:209–216. — The LD-based estimator, including the `1/n` sampling term
+that makes matched sample sizes essential.
 
 Rousset, F. (1997). Genetic differentiation and estimation of gene flow from F-statistics under
 isolation by distance. *Genetics* **145**:1219–1228.

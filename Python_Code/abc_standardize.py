@@ -24,7 +24,24 @@ RESULTS_CSV   = Path("../out/abc_results.csv")          # input: the pass result
 RANKED_CSV    = Path("../out/abc_results_ranked.csv")   # output: results + D, sorted
 SIGMAS_JSON   = Path("../out/abc_sigmas.json")          # output: frozen sigmas
 FITTED_STATS  = ["pi_loss", "fst_loss"]                 # statistics that enter the distance D
-WEIGHTS       = None            # None -> equal weights (1/len(FITTED_STATS)); else dict per stat
+# Set from batch 1 (2,495 trials) by diagnostics/collect_batch.py, NOT equal.
+# Rule: weight by the share of each statistic's batch spread that is DEMOGRAPHIC signal --
+# the unique rank-space R2 of pop + total_migration + m + numClusters.
+#
+#   statistic   R2_total   demographic   mu-nuisance   unexplained
+#   pi_loss        0.240        0.0893        0.1533         0.760
+#   fst_loss       0.622        0.6243        0.0004         0.378
+#
+# pi_loss's spread is MAJORITY mu-draw: 63% of the variance the parameters explain comes from
+# mutation_rate and only 10% from pop. mu is a deliberate nuisance dimension (kept free to absorb
+# the calibration's own uncertainty; only theta=4Nmu is ever reported), so weighting on that
+# variance would put the mu draw into D. fst_loss takes 0.000 from mu -- the empirical
+# confirmation of 5.3's claim that F_st is denominator-invariant.
+#
+# The 7.3 replicate-noise rule was tried first and REJECTED: it gives 0.488/0.512, near-equal,
+# because mu-driven spread is not replicate noise and so counts as signal under it. These weights
+# need no noise floor at all, which also sidesteps the deferred Nei->Hudson floor caveat (TODO 4).
+WEIGHTS       = {"pi_loss": 0.125, "fst_loss": 0.875}   # None -> equal weights
 ACCEPT_FRAC   = 0.20            # fraction of runs to flag as 'accepted' (top by smallest D)
 # ------------------------------------------------------------------
 

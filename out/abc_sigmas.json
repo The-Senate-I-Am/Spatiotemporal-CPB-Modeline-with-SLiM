@@ -1,0 +1,17 @@
+{
+  "sigmas": {
+    "pi_loss": 0.010153456772714373,
+    "fst_loss": 0.00316778237213069
+  },
+  "weights": {
+    "pi_loss": 0.125,
+    "fst_loss": 0.875
+  },
+  "fitted_stats": [
+    "pi_loss",
+    "fst_loss"
+  ],
+  "accept_frac": 0.2,
+  "n_runs": 2495,
+  "n_accepted": 499
+}

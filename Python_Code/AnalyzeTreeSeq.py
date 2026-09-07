@@ -8,6 +8,109 @@ import math
 import numpy as np
 import csv
 
+import ld_common as ldc
+
+# LD is OFF until (a) the empirical side has been run so the bin scale is confirmed (CLAUDE.md
+# 6.8) and (b) its per-trial cost is measured -- this runs inside every ABC trial, where
+# recapitation already takes ~97% of 1764 s at POPMULT=5000 (3.1). Flip to True, or set the
+# COMPUTE_LD environment variable, once both are settled.
+COMPUTE_LD = bool(int(__import__("os").environ.get("COMPUTE_LD", "0")))
+
+
+def _real_sample_sizes(year):
+    '''Diploid individuals actually sequenced per site, in SPECIFIER-MATRIX ROW ORDER.
+
+    Same source and same order as ABCAnalysisNoRedis.get_keep_mask -- popFile{year} counted by
+    site name, indexed by specifier row (CLAUDE.md 4). Reimplemented here rather than imported
+    because ABCAnalysisNoRedis lazily imports Main, which imports this module.
+    Raises rather than silently defaulting if a specifier site is missing from the popfile.
+    '''
+    year = str(year)
+    names = []
+    with open(Path(f"../data/Genetic_Data/specifier_matrix_{year}.csv"), encoding="utf-8") as f:
+        for line in f:
+            if line.strip():
+                names.append(line.split(",")[0].strip())
+
+    counts = {}
+    with open(Path(f"../data/Genetic_Data/popFile{year}"), encoding="utf-8") as f:
+        for line in f:
+            parts = line.split()
+            if len(parts) >= 2:
+                counts[parts[1].strip()] = counts.get(parts[1].strip(), 0) + 1
+
+    missing = [s for s in names if s not in counts]
+    if missing:
+        raise ValueError(f"{year}: specifier sites absent from popFile{year}: {missing}")
+    return [counts[s] for s in names]
+
+
+def _subsample_nodes(ts, pop_idx, time, n_diploid, rng):
+    '''Draw n_diploid whole INDIVIDUALS from one deme and return their sample nodes.
+
+    Individuals, not nodes: the empirical unit is a diploid, and drawing loose nodes would mix
+    haplotypes from different beetles (same argument as diagnostics/fst_subsample.py).
+    Returns every node if the deme holds fewer individuals than requested.
+    '''
+    nodes = ts.samples(population=pop_idx, time=time)
+    by_ind = {}
+    for nd in nodes:
+        ind = ts.node(nd).individual
+        by_ind.setdefault(ind, []).append(nd)
+    inds = np.array(sorted(by_ind), dtype=np.int64)
+    if len(inds) > n_diploid:
+        inds = rng.choice(inds, size=n_diploid, replace=False)
+    return np.array(sorted(nd for i in inds for nd in by_ind[i]), dtype=np.int64)
+
+
+def calculate_ld_decay(ts, genome_indicies, time, year, output_path, rng=None):
+    '''Per-deme LD decay (mean r^2 vs physical distance), written as bins x demes.
+
+    THE ONE STATISTIC HERE THAT MUST BE SUBSAMPLED. The other four run on whole demes (301-714
+    diploids), which 6.6 measured as correct for pi and ~1% on F_st. r^2 is different in kind: its
+    small-sample bias is ~1/n_haplotypes (Hill 1981, CLAUDE.md 11), i.e. ~0.06-0.10 at the real
+    n = 5-8 diploids -- plausibly larger than the signal. So the simulated demes are cut to each
+    site's real n_i and the identical bias appears on both sides (invariant 1). Do NOT repoint the
+    other four statistics at these sample sets: 6.6 measured that subsampling makes pi_loss worse.
+
+    Binning, MAF filter and pair enumeration all come from ld_common, which the empirical side
+    imports too. Writes ld_{year}.csv with rows = distance bins, columns = demes in
+    specifier-matrix row order, mirroring the empirical file's layout (7.5).
+    '''
+    if rng is None:
+        # np.random is seeded per job by ABCAnalysisNoRedis (np.random.seed(job_id)), so this is
+        # reproducible per trial and varies across them, like the rest of the pipeline.
+        rng = np.random.default_rng(np.random.randint(0, 2**31 - 1))
+
+    n_real = _real_sample_sizes(year)
+    if len(n_real) != len(genome_indicies):
+        raise ValueError(f"{year}: {len(n_real)} specifier rows vs "
+                         f"{len(genome_indicies)} demes -- ordering is broken (CLAUDE.md 4)")
+
+    K = len(genome_indicies)
+    sum_r2 = np.zeros((ldc.N_BINS, K))
+    cnt = np.zeros((ldc.N_BINS, K))
+
+    all_pos = ts.tables.sites.position.astype(np.int64)
+    for k, idx in enumerate(genome_indicies):
+        nodes = _subsample_nodes(ts, idx, time, n_real[k], rng)
+        if len(nodes) < 4:                      # need >=2 diploids for any r^2 at all
+            continue
+        # Per deme, never genome-wide: the full matrix is 255k sites x 70k samples (1.8e10).
+        # Here it is 2*n_i haplotypes x 255k sites, which is trivial.
+        H = ts.genotype_matrix(samples=nodes)
+        biallelic = H.max(axis=1) <= 1          # SLiMMutationModel can stack states at a site
+        # Left in its native small dtype; ld_common.standardize() casts. Same reasoning as
+        # CalculateLD.haplotypes() -- the cast belongs next to the MAF filter, not here.
+        pos_k, H = all_pos[biallelic], H[biallelic]
+        # msprime places mutations on integer positions, so several can share one. accumulate()
+        # requires ascending UNIQUE positions, and a d = 0 pair is not a distance.
+        pos_k, first = np.unique(pos_k, return_index=True)
+        ldc.decay_one_pop(pos_k, H[first], sum_r2[:, k], cnt[:, k])
+
+    ldc.write_decay(output_path, sum_r2, cnt, [str(i) for i in range(K)])
+    return sum_r2, cnt
+
 def calculate_diversity_and_divergence(ts, genome_indicies, time, output_diversities_path,
                                        output_divergences_path, output_fst_path,
                                        output_relatedness_path):
@@ -178,4 +281,18 @@ def analyze_tree_sequence(mutation_rate=None, recombination_rate=None, ancestral
         output_divergences_path=Path("../data/Output_Data/divergences_2015.csv"),
         output_fst_path=Path("../data/Output_Data/fst_2015.csv"),
         output_relatedness_path=Path("../data/Output_Data/relatedness_2015.csv"))
+
+    # LD decay (CLAUDE.md 7.5). Kept OFF by default until the empirical side has been run and the
+    # bin scale confirmed (6.8) -- and until its per-trial cost is measured, since this runs inside
+    # every ABC trial. Enable with COMPUTE_LD=1.
+    if COMPUTE_LD:
+        print(f"LD decay (ld_common spec {ldc.spec_hash()}) -- "
+              f"the empirical side must print the same hash...")
+        for year, gidx, t in [("2023", genome_indicies_2023, 0),
+                              ("2019", genome_indicies_2019, 8),
+                              ("2015", genome_indicies_2015, 16)]:
+            s, c = calculate_ld_decay(
+                ts, gidx, time=t, year=year,
+                output_path=Path(f"../data/Output_Data/ld_{year}.csv"))
+            ldc.report_halfway(s, c, prefix=f"    {year}: ")
     

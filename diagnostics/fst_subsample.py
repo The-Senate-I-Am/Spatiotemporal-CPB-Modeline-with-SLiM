@@ -150,13 +150,18 @@ def build_mutated_ts(recomb, mu, seed, save_path=None):
     return ts, cluster_data, gi
 
 
-def fst_matrix(ts, sets):
-    """Off-diagonal Fst for a list of sample sets, one batched traversal (AnalyzeTreeSeq.py:47)."""
+def fst_matrix(ts, sets, pi=None):
+    """Off-diagonal HUDSON Fst, one batched traversal, matching AnalyzeTreeSeq.py.
+
+    NOT ts.Fst -- that returns Nei/Slatkin, ~half of Hudson (CLAUDE.md 6.7, invariant 9).
+    pi: per-set site diversity; recomputed here if not supplied."""
     k = len(sets)
+    if pi is None:
+        pi = np.asarray(ts.diversity(sets), dtype=float)
     pairs = [(i, j) for i in range(k) for j in range(k) if i != j]
     F = np.zeros((k, k))
-    for (i, j), v in zip(pairs, np.asarray(ts.Fst(sets, indexes=pairs)).ravel()):
-        F[i, j] = v
+    for (i, j), dv in zip(pairs, np.asarray(ts.divergence(sets, indexes=pairs)).ravel()):
+        F[i, j] = 0.0 if dv == 0 else 1.0 - 0.5 * (pi[i] + pi[j]) / dv
     return F
 
 
@@ -231,7 +236,7 @@ def main(a):
     print(f"\n[{time.strftime('%H:%M:%S')}] whole-deme baseline ...", flush=True)
     t1 = time.perf_counter()
     pi_full = {y: np.asarray(ts.diversity(ss[y]), dtype=float) for y in TIMES}
-    fst_full = {y: fst_matrix(ts, ss[y]) for y in TIMES}
+    fst_full = {y: fst_matrix(ts, ss[y], pi_full[y]) for y in TIMES}
     print(f"[{time.strftime('%H:%M:%S')}] baseline {time.perf_counter()-t1:.1f}s", flush=True)
 
     def losses(pi_d, fst_d):
@@ -271,7 +276,7 @@ def main(a):
                 sets.append(np.sort(g[pick].ravel()))
             sub[y] = sets
         pi_s = {y: np.asarray(ts.diversity(sub[y]), dtype=float) for y in TIMES}
-        fst_s = {y: fst_matrix(ts, sub[y]) for y in TIMES}
+        fst_s = {y: fst_matrix(ts, sub[y], pi_s[y]) for y in TIMES}
         for y in TIMES:
             pi_reps[y].append(pi_s[y])
             fst_reps[y].append(fst_s[y])
